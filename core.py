@@ -154,6 +154,10 @@ class Game:
         self.crates = [Crate(float(x), float(y)) for x, y in self.room["crates"]]
         self.obstacles = [tuple(o) for o in self.room.get("obstacles", [])]
         self.ammo_pickups = [list(p) for p in self.room.get("ammo", [])]
+        self.settle_initial_layout()
+        errors = self.layout_errors()
+        if errors:
+            raise ValueError(f"Invalid room {self.room_index+1}: " + "; ".join(errors))
         self.bullets, self.effects, self.events = [], [], []
         self.history.clear()
         self.world_time = 0.0
@@ -168,6 +172,44 @@ class Game:
             self.entry_ammo = self.magazine, self.reserve
         self.history.append((0.0, self.player.x, self.player.y))
         self.message(self.room["hint"], 6.0)
+
+    def settle_initial_layout(self):
+        """Place objects on support without simulating damaging startup falls."""
+        supports = list(self.obstacles)
+        for crate in sorted(self.crates, key=lambda c: c.y):
+            tops = [r[3] for r in supports
+                    if crate.x+23 > r[0] and crate.x-23 < r[2]
+                    and r[3] <= crate.y-23+.5]
+            crate.y = max([BOTTOM] + tops) + 23
+            crate.vx = crate.vy = 0.0
+            supports.append(crate.box)
+        for actor in [self.player] + self.enemies:
+            tops = [r[3] for r in supports
+                    if actor.x+15 > r[0] and actor.x-15 < r[2]
+                    and r[3] <= actor.y-PLAYER_HALF+.5]
+            actor.y = max([BOTTOM] + tops) + PLAYER_HALF
+            actor.vy = 0.0
+
+    def layout_errors(self):
+        """Reject room entries inside cover instead of hiding authoring errors."""
+        errors = []
+        actors = [self.player] + self.enemies
+        for index, actor in enumerate(actors):
+            label = "player" if index == 0 else f"enemy {index}"
+            x1,y1,x2,y2 = actor.box
+            if x1 < LEFT or x2 > RIGHT or y1 < BOTTOM-.5 or y2 > TOP:
+                errors.append(f"{label} outside room")
+            if any(self.overlap(actor.box, rect) for rect in self.solids()):
+                errors.append(f"{label} overlaps cover")
+            if any(self.overlap(actor.box, other.box) for other in actors[:index]):
+                errors.append(f"{label} overlaps another actor")
+        for index, crate in enumerate(self.crates):
+            x1,y1,x2,y2 = crate.box
+            if x1 < LEFT or x2 > RIGHT or y1 < BOTTOM-.5 or y2 > TOP:
+                errors.append(f"crate {index+1} outside room")
+            if any(self.overlap(crate.box, rect) for rect in self.solids(skip=crate)):
+                errors.append(f"crate {index+1} overlaps cover")
+        return errors
 
     def next_room(self):
         if not self.clear or self.state != "playing":
