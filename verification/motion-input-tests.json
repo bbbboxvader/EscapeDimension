@@ -54,7 +54,21 @@
     "reload_walk_keeps_torso_and_changes_legs",
     "two_d_torso_aims_up_and_down_without_turning_legs",
     "knife_uses_blade_art",
-    "knife_death_keeps_blade_art"
+    "knife_death_keeps_blade_art",
+    "waist_connected_aim_0_-85",
+    "waist_connected_aim_0_-45",
+    "waist_connected_aim_0_0",
+    "waist_connected_aim_0_45",
+    "waist_connected_aim_0_85",
+    "waist_connected_reload_walk_0_0",
+    "waist_connected_reload_walk_0_8",
+    "waist_connected_aim_4_-85",
+    "waist_connected_aim_4_-45",
+    "waist_connected_aim_4_0",
+    "waist_connected_aim_4_45",
+    "waist_connected_aim_4_85",
+    "waist_connected_reload_walk_4_0",
+    "waist_connected_reload_walk_4_8"
   ],
-  "count": 54
+  "count": 68
 }

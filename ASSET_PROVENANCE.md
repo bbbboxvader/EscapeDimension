@@ -6,6 +6,8 @@
 
 상하체 분리는 기존 시트의 허리 위·아래 영역을 pico2d에서 별도로 그리는 방식입니다. 원본 이미지를 덮어쓰지 않고 상체 조준·장전과 하체 걷기를 합성합니다. 칼 적 사망 시에도 같은 칼 에셋을 유지하며 회전·하강 표현으로 쓰러집니다.
 
+상하 조준의 허리 연결 개선에는 새 비트맵 생성 없이 기존 PNG를 사용합니다. SDL의 텍스처 메시에서 허리 정점은 고정하고 팔·어깨 쪽에 연속적인 변형 가중치를 적용합니다. `docs/connected-aim.png`는 수정된 게임 렌더러의 실제 출력이며, `tools/render_aim.py`로 다시 만들 수 있습니다.
+
 ## 모션 에셋
 
 `walk_player.png`, `walk_enemy.png`, `reload_player.png`, `death_both.png`는 기존 `characters_8dir.png`를 정체성과 화풍 참고 자료로 사용하여 OpenAI 내장 `image_gen` 도구로 제작했습니다. 실제 알파 투명도를 유지한 4열×4행 시트입니다. 전체 프롬프트는 [motion_prompts.md](assets/motion_prompts.md)에 있습니다.
