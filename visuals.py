@@ -4,6 +4,12 @@ from math import atan2, floor, pi
 DIRECTIONS = ('E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE')
 
 
+def torso_angle(dx, dy):
+    """Side-view torso pitch around the belt; legs keep their left/right pose."""
+    angle=atan2(dy,max(abs(dx),.001))
+    return -angle if dx<0 else angle
+
+
 def direction_index(dx, dy, mode=3):
     """Counter-clockwise octant; screen y points upward like the simulation."""
     if mode == 2:

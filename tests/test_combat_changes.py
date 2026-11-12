@@ -37,12 +37,15 @@ class CombatChanges(unittest.TestCase):
         for _ in range(70):g.tick(.02)
         self.assertEqual((g.magazine,g.reserve),(6,36))
 
-    def test_two_d_shoots_and_faces_only_left_or_right(self):
+    def test_two_d_aims_up_and_down_while_facing_left_or_right(self):
         g=arena()
         for x,side in ((900,0),(100,4)):
             for y in (170,600):
                 g.shot_cooldown=0;g.shoot((x,y))
-                self.assertEqual(g.bullets[-1].vy,0)
+                if y>g.player.y+24:
+                    self.assertGreater(g.bullets[-1].vy,0)
+                else:
+                    self.assertLess(g.bullets[-1].vy,0)
                 self.assertEqual(g.player.facing,side)
 
     def test_free_modes_can_shoot_vertically(self):
@@ -60,7 +63,7 @@ class CombatChanges(unittest.TestCase):
             g.update_enemies(.01)
             bullet=g.bullets[-1]
             self.assertAlmostEqual(hypot(bullet.vx,bullet.vy),320+25*index)
-            self.assertEqual(bullet.vy,0)
+            self.assertIn(g.enemies[0].facing,(0,4))
 
     def test_walk_phase_advances_only_with_actual_ground_motion(self):
         g=arena();before=g.player.walk_distance;g.tick(.04,(1,0))

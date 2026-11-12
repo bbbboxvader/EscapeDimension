@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
-from math import hypot, ceil
+from dataclasses import dataclass, field
+from math import hypot, ceil, sin, cos
 import json
 from pathlib import Path
-from visuals import direction_index
+from visuals import direction_index, torso_angle
+from navigation import Navigator
 
 WIDTH, HEIGHT = 1280, 800
 LEFT, RIGHT, BOTTOM, TOP = 76.0, 1204.0, 154.0, 666.0
@@ -18,6 +19,7 @@ MAX_AMMO = 42
 RELOAD_DURATION = 1.25
 DEATH_DURATION = .8
 ENEMY_BULLET_SPEED = 320.0
+KNIFE_SPEED = 420.0
 
 
 def clamp(value, low, high):
@@ -63,6 +65,10 @@ class Actor:
     moving: bool = False
     walk_distance: float = 0.0
     death_elapsed: float = 0.0
+    route: list = field(default_factory=list)
+    nav_left: float = 0.0
+    nav_revision: int = -1
+    nav_goal: tuple = (0.0,0.0)
 
     @property
     def box(self):
@@ -129,6 +135,9 @@ class Game:
         self.last_age_cost = 0
         self.entry_ammo = (MAGAZINE_SIZE, MAX_AMMO-MAGAZINE_SIZE)
         self.grace = 0.0
+        self._nav_signature = None
+        self._navigator = None
+        self._nav_revision = 0
 
     @property
     def room(self):
@@ -156,20 +165,31 @@ class Game:
 
     def aim_direction(self, aim, actor=None):
         actor = actor or self.player
-        dx,dy = aim[0]-actor.x, aim[1]-actor.y-24
-        if self.mode == 2:
-            return (1.0 if dx >= 0 else -1.0), 0.0
-        return unit(dx,dy)
+        x,y=self.muzzle_position(aim,actor)
+        return unit(aim[0]-x,aim[1]-y)
+
+    def muzzle_position(self, aim, actor=None):
+        actor=actor or self.player
+        if self.mode==2:
+            angle=torso_angle(aim[0]-actor.x,aim[1]-actor.y-24)
+            side=1 if aim[0]>=actor.x else -1
+            return (actor.x+side*27*cos(angle)-19*sin(angle),
+                    actor.y+14+side*27*sin(angle)+19*cos(angle))
+        dx,dy=unit(aim[0]-actor.x,aim[1]-actor.y-24)
+        return actor.x+dx*25,actor.y+24+dy*25
 
     @property
     def grounded(self):
-        if self.mode != 2 or not self.player.alive or self.player.vy > 0:
+        return self.actor_grounded(self.player)
+
+    def actor_grounded(self, actor):
+        if self.mode != 2 or not actor.alive or actor.vy > 0:
             return False
-        feet = self.player.y-PLAYER_HALF
+        feet = actor.y-PLAYER_HALF
         if abs(feet-BOTTOM) <= .5:
             return True
-        return any(abs(feet-top) <= .5 and self.player.x+15 > left
-                   and self.player.x-15 < right
+        return any(abs(feet-top) <= .5 and actor.x+15 > left
+                   and actor.x-15 < right
                    for left,bottom,right,top in self.solids())
 
     def jump(self):
@@ -215,6 +235,7 @@ class Game:
         self.reload_left = self.shot_cooldown = 0.0
         self.clear = False
         self.grace = 1.2
+        self._nav_signature = None
         if retry:
             self.magazine, self.reserve = self.entry_ammo
         else:
@@ -315,6 +336,9 @@ class Game:
             if self.state != "playing":
                 return False
         self.mode = mode
+        for actor in self.enemies:
+            actor.route.clear()
+            actor.nav_left = 0
         if mode == 2:
             for actor in [self.player]+self.enemies:
                 if actor.alive:
@@ -429,14 +453,14 @@ class Game:
         if self.magazine <= 0:
             self.message("탄창이 비었습니다. R로 장전하세요", 1.0)
             return False
-        muzzle_y = self.player.y+24
+        muzzle_x,muzzle_y = self.muzzle_position(aim)
         dx, dy = self.aim_direction(aim)
-        self.player.facing = direction_index(dx,dy,self.mode)
-        self.bullets.append(Bullet(self.player.x+dx*25, muzzle_y+dy*25, dx*850, dy*850, "player"))
+        self.player.facing = direction_index(aim[0]-self.player.x,aim[1]-self.player.y-24,self.mode)
+        self.bullets.append(Bullet(muzzle_x,muzzle_y,dx*850,dy*850,"player"))
         self.shot_cooldown, self.magazine = .22, self.magazine-1
         self.shots += 1
         self.events.append("shot")
-        self.effects.append([self.player.x+dx*29, muzzle_y+dy*29, .1, "flash"])
+        self.effects.append([muzzle_x+dx*4,muzzle_y+dy*4,.1,"flash"])
         return True
 
     @staticmethod
@@ -463,7 +487,7 @@ class Game:
             actor.vy = 0
         for box in self.solids():
             if self.overlap(actor.box, box):
-                if dy < 0 and old_y-PLAYER_HALF >= box[3]-.5:
+                if dy < 0 and (not gravity or old_y-PLAYER_HALF >= box[3]-.5):
                     actor.y, actor.vy = box[3]+PLAYER_HALF, 0
                 elif dy > 0:
                     actor.y, actor.vy = box[1]-48, 0
@@ -520,35 +544,93 @@ class Game:
     def blocked(self, x1, y1, x2, y2):
         return any(segment_box(x1, y1, x2, y2, b) is not None for b in self.solids())
 
+    def chase(self, enemy, speed, dt):
+        """Use the same collision body as the player; never move through cover."""
+        before=enemy.x,enemy.y
+        if self.mode == 2:
+            target_x=self.player.x
+            if self.actor_grounded(enemy):
+                feet=enemy.y-PLAYER_HALF
+                support=next((r for r in self.solids() if abs(r[3]-feet)<.5
+                              and r[0]-15<enemy.x<r[2]+15),None)
+                if support and self.player.y < enemy.y-45 and support[0]-15<target_x<support[2]+15:
+                    # Leave a ledge via its nearer end instead of pacing above the player.
+                    edges=(support[0]-18,support[2]+18)
+                    target_x=min(edges,key=lambda x:abs(enemy.x-x)+abs(self.player.x-x))
+                direction=1 if target_x>enemy.x else -1
+                lookahead=max(32,speed*.12)
+                x1,x2=sorted((enemy.x+direction*15,enemy.x+direction*lookahead))
+                blockers=[r for r in self.solids() if r[0]<x2 and r[2]>x1
+                          and r[1]<enemy.y+48 and r[3]>feet+.5]
+                max_height=JUMP_SPEED**2/(2*GRAVITY)-5
+                jumpable=blockers and all(r[3]-feet<=max_height for r in blockers)
+                overhead=any(r[0]<enemy.x+15 and r[2]>enemy.x-15
+                             and enemy.y+48<=r[1]<enemy.y+48+max_height for r in self.solids())
+                if jumpable and not overhead:
+                    enemy.vy=JUMP_SPEED
+            dx=clamp(target_x-enemy.x,-speed*dt,speed*dt)
+            self.move_actor(enemy,dx,0,dt,True)
+        else:
+            solids=self.solids()
+            signature=tuple(tuple(round(v,1) for v in rect) for rect in solids)
+            if signature!=self._nav_signature:
+                self._nav_signature=signature
+                self._nav_revision+=1
+                self._navigator=Navigator(solids,(LEFT+16,BOTTOM+22,RIGHT-16,TOP-48),segment_box)
+            enemy.nav_left-=dt
+            goal=self.player.x,self.player.y
+            if (enemy.nav_left<=0 or enemy.nav_revision!=self._nav_revision
+                    or hypot(goal[0]-enemy.nav_goal[0],goal[1]-enemy.nav_goal[1])>60):
+                enemy.route=self._navigator.route((enemy.x,enemy.y),goal)
+                enemy.nav_goal=goal;enemy.nav_left=.22;enemy.nav_revision=self._nav_revision
+            while enemy.route and hypot(enemy.route[0][0]-enemy.x,enemy.route[0][1]-enemy.y)<.4:
+                enemy.route.pop(0)
+            if enemy.route:
+                x,y=enemy.route[0];dx,dy=unit(x-enemy.x,y-enemy.y)
+                distance=min(speed*dt,hypot(x-enemy.x,y-enemy.y))
+                self.move_actor(enemy,dx*distance,dy*distance,dt)
+            else:
+                self.move_actor(enemy,0,0,dt)
+        if enemy.moving and enemy.kind in ('hunter','knife'):
+            enemy.facing=direction_index(enemy.x-before[0],enemy.y-before[1],self.mode)
+
     def update_enemies(self, dt):
         for e in self.enemies:
             if not e.alive:
                 continue
             dx, dy = unit(self.player.x-e.x, self.player.y-e.y)
             e.facing = direction_index(dx,dy,self.mode)
-            if e.kind == "hunter":
-                speed = 76+self.room_index*8
-                self.move_actor(e, dx*speed*dt, dy*speed*dt if self.mode != 2 else 0, dt, self.mode == 2)
+            distance=hypot(self.player.x-e.x,self.player.y-e.y)
+            sight=not self.blocked(e.x,e.y+24,self.player.x,self.player.y+24)
+            pursuing=e.kind in ('hunter','knife') or not sight or distance>480
+            if self.grace<=0 and pursuing:
+                speed=(KNIFE_SPEED+self.room_index*20 if e.kind=='knife'
+                       else 76+self.room_index*8 if e.kind=='hunter' else 110+self.room_index*8)
+                self.chase(e,speed,dt)
             else:
-                self.move_actor(e, 0, 0, dt, self.mode == 2)
-                if self.mode == 2:
-                    e.aim_y = e.y+24
+                self.move_actor(e,0,0,dt,self.mode==2)
+            if e.kind == 'sentry':
                 if self.grace <= 0 and not self.clear:
                     e.timer -= dt
                     if e.timer <= .8 and not e.winding:
                         e.winding = True
                     if e.winding and e.timer > .15:
                         e.aim_x, e.aim_y = self.player.x, self.player.y+24
-                        if self.mode == 2:
-                            e.aim_y = e.y+24
                     if e.timer <= 0:
                         if not self.blocked(e.x, e.y+24, e.aim_x, e.aim_y):
                             ax, ay = self.aim_direction((e.aim_x,e.aim_y),e)
+                            muzzle_x,muzzle_y=self.muzzle_position((e.aim_x,e.aim_y),e)
                             speed = ENEMY_BULLET_SPEED+self.room_index*25
-                            self.bullets.append(Bullet(e.x+ax*25, e.y+24+ay*25, ax*speed, ay*speed, "enemy", 6.0))
+                            self.bullets.append(Bullet(muzzle_x,muzzle_y,ax*speed,ay*speed,"enemy",6.0))
                             self.events.append("enemy_shot")
                         e.winding = False
                         e.timer = 2.5-self.room_index*.12
+            if (e.kind=='knife' and self.grace<=0
+                    and hypot(self.player.x-e.x,self.player.y-e.y)<48
+                    and not self.blocked(e.x,e.y+24,self.player.x,self.player.y+24)):
+                self.effects.append([e.x,e.y+20,.22,'slash'])
+                self.die()
+                return
             if self.grace <= 0 and self.overlap(self.player.box, e.box):
                 self.die()
                 return
