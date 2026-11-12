@@ -3,10 +3,17 @@ import unittest
 from math import cos, sin, radians
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from visuals import direction_index, atlas_region, motion_frame
+from visuals import direction_index, atlas_region, motion_frame, torso_angle
 
 
 class DirectionTests(unittest.TestCase):
+    def test_torso_rotates_oppositely_for_left_and_right_side_aim(self):
+        self.assertGreater(torso_angle(100,100),0)
+        self.assertLess(torso_angle(100,-100),0)
+        self.assertLess(torso_angle(-100,100),0)
+        self.assertGreater(torso_angle(-100,-100),0)
+        self.assertAlmostEqual(torso_angle(100,0),0)
+
     def test_two_d_has_only_two_visual_facings(self):
         for x in (-100,100):
             for y in (-100,0,100):

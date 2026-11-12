@@ -29,7 +29,7 @@ from sdl2 import (SDL_SetWindowTitle, SDL_SetRenderDrawColor, SDL_RenderClear,
 
 from core import (Game, WIDTH, HEIGHT, LEFT, RIGHT, BOTTOM, TOP, clamp,
                   MAGAZINE_SIZE, MAX_AMMO, RELOAD_DURATION, DEATH_DURATION)
-from visuals import direction_index, atlas_region, motion_frame
+from visuals import direction_index, atlas_region, motion_frame, torso_angle
 
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS = ROOT / "assets"
@@ -63,7 +63,7 @@ class App:
         self.cw, self.ch = self.atlas.w//3, self.atlas.h//2
         self.characters = p.load_image(str(ASSETS/"characters_8dir.png"))
         self.motion_atlases = {'idle':self.characters}
-        for name in ('walk_player','walk_enemy','reload_player','death_both'):
+        for name in ('walk_player','walk_enemy','reload_player','death_both','knife_enemy'):
             self.motion_atlases[name] = p.load_image(str(ASSETS/(name+'.png')))
         fonts = [Path("C:/Windows/Fonts/malgun.ttf"), Path(os.getenv("PICO2D_DATA_PATH", ""))/"ConsolaMalgun.TTF",
                  Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
@@ -111,12 +111,33 @@ class App:
         self.atlas.clip_composite_draw(col*self.cw, (1-row)*self.ch, self.cw,self.ch,0,"h" if flip else "",x,y,size,size)
         SDL_SetTextureAlphaMod(self.atlas.texture,255)
 
-    def character_frame(self, frame, x, y, size=84, alpha=255, atlas='idle'):
+    def character_frame(self, frame, x, y, size=84, alpha=255, atlas='idle', angle=0):
         image = self.motion_atlases[atlas]
         region = atlas_region(frame, image.w, image.h)
         SDL_SetTextureAlphaMod(image.texture, int(clamp(alpha,0,255)))
-        image.clip_draw(*region, x, y, size, size)
+        image.clip_composite_draw(*region,angle,'',x,y,size,size)
         SDL_SetTextureAlphaMod(image.texture,255)
+
+    def character_layers(self, upper, lower, x, y, size=84, alpha=255, angle=0):
+        """Compose legs and torso from source cells with a pivot at the belt."""
+        bottom=y-size/2
+        for part,(name,frame) in (('legs',lower),('torso',upper)):
+            image=self.motion_atlases[name]
+            sx,sy,sw,sh=atlas_region(frame,image.w,image.h)
+            cut=round(sh*.45)
+            SDL_SetTextureAlphaMod(image.texture,alpha)
+            if part=='legs':
+                height=size*cut/sh
+                image.clip_draw(sx,sy,sw,cut,x,bottom+height/2,size,height+2)
+            else:
+                overlap=min(4,cut)
+                height=size*(sh-cut+overlap)/sh
+                waist=bottom+size*.45
+                offset=height/2-size*overlap/sh
+                image.clip_composite_draw(sx,sy+cut-overlap,sw,sh-cut+overlap,angle,'',
+                                          x-math.sin(angle)*offset,
+                                          waist+math.cos(angle)*offset,size,height)
+            SDL_SetTextureAlphaMod(image.texture,255)
 
     def actor(self, actor, target, player=False, alpha=255):
         dx,dy = target[0]-actor.x, target[1]-(actor.y+24)
@@ -129,14 +150,32 @@ class App:
                                   enemy=not player,death_duration=DEATH_DURATION)
         if player:
             self.player_motion = atlas,frame
+            self.player_layers = None
         if not actor.alive and not player:
             alpha = int(max(95,255-max(0,actor.death_elapsed-1)*65))
         bob = abs(math.sin(actor.walk_distance*.15))*1.0 if actor.alive and actor.moving and reload_progress is None else 0
         shade = CYAN if player else RED
         self.line(actor.x-13,actor.y-21,actor.x+13,actor.y-21,shade,70)
         self.line(actor.x-8,actor.y-23,actor.x+8,actor.y-23,shade,35)
-        self.character_frame(frame,actor.x,actor.y+18+bob,84,alpha,atlas)
-        if not player and actor.alive and actor.kind == 'hunter':
+        knife=actor.kind=='knife'
+        if knife:
+            knife_frame=facing+(int(actor.walk_distance/32)%2)*8
+            progress=clamp(actor.death_elapsed/DEATH_DURATION,0,1) if not actor.alive else 0
+            angle=progress*math.pi/2*(-1 if facing in (3,4,5) else 1)
+            self.character_frame(knife_frame,actor.x,actor.y+18-10*progress,84,alpha,'knife_enemy',angle)
+            self.last_enemy_art='knife_enemy',knife_frame
+        elif actor.alive and (self.game.mode==2 or reload_progress is not None):
+            lower=motion_frame(facing,actor.walk_distance,actor.moving,enemy=not player)
+            angle=torso_angle(dx,dy) if self.game.mode==2 and reload_progress is None else 0
+            self.character_layers((atlas,frame),lower,actor.x,actor.y+18+bob,84,alpha,angle)
+            if player:
+                self.player_layers={'upper':(atlas,frame),'lower':lower,'angle':angle}
+        else:
+            self.character_frame(frame,actor.x,actor.y+18+bob,84,alpha,atlas)
+            if player:self.player_layers=None
+        if not player and actor.alive and actor.kind=='knife':
+            self.text('KNIFE',actor.x-20,actor.y+70,14,(200,105,37))
+        elif not player and actor.alive and actor.kind == 'hunter':
             self.text('!',actor.x-3,actor.y+70,14,(177,98,38))
 
     def events(self):
@@ -330,8 +369,9 @@ class App:
         self.actor(g.player,self.mouse,player=True)
         if g.player.alive:
             dx,dy=g.aim_direction(self.mouse)
-            self.line(g.player.x+dx*39,g.player.y+24+dy*39,
-                      g.player.x+dx*47,g.player.y+24+dy*47,CYAN,170)
+            muzzle_x,muzzle_y=g.muzzle_position(self.mouse)
+            self.line(muzzle_x+dx*12,muzzle_y+dy*12,
+                      muzzle_x+dx*20,muzzle_y+dy*20,CYAN,170)
         if g.grace>0 and g.player.alive:
             p.draw_circle(g.player.x,g.player.y,35,*CYAN,100,False)
         for b in g.bullets:
@@ -341,6 +381,7 @@ class App:
             self.line(b.x-b.vx/norm*12,b.y-b.vy/norm*12,b.x,b.y,color)
         for x,y,life,kind in g.effects:
             color=RED if kind=="hit" else (211,166,38)
+            if kind=='slash':color=(220,114,33)
             if kind=="flash":color=(218,161,25)
             radius=9 if kind=="flash" else int(25*(1-life/.45))
             p.draw_circle(x,y,max(2,radius),*color,int(clamp(life*700,0,255)),False)
@@ -517,9 +558,12 @@ class App:
         press(p.SDLK_q);check('key_q_throw',self.game.held is None)
         mouse(p.SDL_MOUSEBUTTONDOWN,1050,420)
         # A synthetic event may not grant desktop focus, so test the firing handler itself.
-        self.game.tick(.04,aim=self.mouse,firing=True)
+        shot_aim=self.mouse
+        self.game.tick(.04,aim=shot_aim,firing=True)
         mouse(p.SDL_MOUSEBUTTONUP,1050,420)
-        check('mouse_aim_and_fire',self.game.magazine==5 and self.mouse==(1050,420))
+        if not (self.game.magazine==5 and shot_aim==(1050,420)):
+            raise AssertionError(f'mouse_aim_and_fire: ammo={self.game.magazine}, aim={shot_aim}, state={self.game.state}, reload={self.game.reload_left}, cooldown={self.game.shot_cooldown}')
+        check('mouse_aim_and_fire',True)
         press(p.SDLK_F1);check('f1_help',self.help)
         press(p.SDLK_ESCAPE);check('escape_closes_help',not self.help)
         press(p.SDLK_ESCAPE);check('escape_pause',self.paused)
@@ -558,6 +602,23 @@ class App:
         first=self.player_motion
         self.game.reload_left=RELOAD_DURATION*.4;self.draw()
         check('reload_changes_hand_frame',first[0]=='reload_player' and self.player_motion!=first)
+        self.game.player.moving=True;self.game.player.walk_distance=0;self.draw()
+        upper=self.player_layers['upper'];lower=self.player_layers['lower']
+        self.game.player.walk_distance=33;self.draw()
+        check('reload_walk_keeps_torso_and_changes_legs',
+              self.player_layers['upper']==upper and self.player_layers['lower']!=lower
+              and self.player_layers['lower'][0]=='walk_player')
+        self.game.set_mode(2);self.game.reload_left=0;self.game.player.moving=False
+        self.mouse=(900,550);self.draw()
+        up=self.player_layers
+        self.mouse=(900,200);self.draw()
+        check('two_d_torso_aims_up_and_down_without_turning_legs',
+              up['angle']>0 and self.player_layers['angle']<0 and up['lower']==self.player_layers['lower'])
+        knife=type(self.game.player)(950,340,'knife',facing=4)
+        self.actor(knife,(600,340))
+        check('knife_uses_blade_art',self.last_enemy_art[0]=='knife_enemy')
+        knife.alive=False;knife.death_elapsed=.8;self.actor(knife,(600,340))
+        check('knife_death_keeps_blade_art',self.last_enemy_art[0]=='knife_enemy')
         self.game.start()
         self.draw()
         if self.args.capture:self.screenshot(self.args.capture)
