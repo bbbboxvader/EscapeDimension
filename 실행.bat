@@ -1,14 +1,17 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-if exist "EscapeDimension.exe" (
-  start "" "%~dp0EscapeDimension.exe"
-  exit /b
+if not exist ".venv\Scripts\python.exe" (
+  python tools\setup_runtime.py
+  if errorlevel 1 (
+    echo Python 환경 준비에 실패했습니다.
+    pause
+    exit /b 1
+  )
 )
-py -3 main.py
+".venv\Scripts\python.exe" main.py
 if errorlevel 1 (
   echo.
-  echo 소스 실행에는 Python과 pico2d가 필요합니다.
-  echo 설치: py -3 -m pip install -r requirements.txt
+  echo 실행 오류를 확인하세요. 환경 복구: python tools\setup_runtime.py
   pause
 )

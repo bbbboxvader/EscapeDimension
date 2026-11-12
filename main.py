@@ -6,8 +6,18 @@ import math
 import os
 from pathlib import Path
 import random
+import subprocess
 import sys
 import time
+
+# Keep main.py as the entry point even when launched with the system Python.
+# The project environment owns its pico2d / SDL dependencies.
+if __name__ == '__main__' and not getattr(sys, 'frozen', False):
+    project_root = Path(__file__).resolve().parent
+    project_env = project_root / '.venv'
+    project_python = project_env / 'Scripts' / 'python.exe'
+    if project_python.is_file() and Path(sys.prefix).resolve() != project_env.resolve():
+        raise SystemExit(subprocess.call([str(project_python), str(Path(__file__).resolve()), *sys.argv[1:]]))
 
 import pico2d as p
 import pico2d.pico2d as api

@@ -15,7 +15,15 @@
 
 ## 바로 실행
 
-Windows 10/11 64비트에서 압축을 **전부 해제**한 뒤 `EscapeDimension.exe`를 실행하세요. 또는 `실행.bat`를 실행하세요. 배포용 실행 파일에는 Python과 pico2d 런타임을 포함하므로 별도 Python 설치가 필요하지 않습니다. 게임 창은 1280×800입니다.
+게임 실행 진입점은 **`main.py`**입니다. `실행.bat` 또는 상위 폴더의 `게임 실행.bat`도 `main.py`를 실행합니다. 게임 창은 1280×800입니다.
+
+이 PC의 Python 3.14.3을 사용해 프로젝트 전용 `.venv` 환경을 준비하고 **pico2d 1.5.1, PySDL2 0.9.17, SDL DLL 2.32.10**을 설치했습니다. 게임 폴더에서 다음 명령으로 실행합니다.
+
+```powershell
+python main.py
+```
+
+`main.py`는 프로젝트의 `.venv`를 자동으로 사용합니다. 따라서 소스와 `levels.json`을 수정하면 다음 실행에 바로 반영됩니다. 다운로드한 설치용 wheel 파일은 `.runtime/wheels/`에 보관해 두었습니다. Python과 `.venv`는 별도 환경 설치 파일이며 소스 코드와 함께 Git에 올리지 않습니다.
 
 시작 화면에서 **Enter**를 누릅니다. **F1**으로 조작 안내를 열고 닫습니다. 창의 닫기 버튼으로 종료할 수 있습니다.
 
@@ -59,11 +67,11 @@ Windows 10/11 64비트에서 압축을 **전부 해제**한 뒤 `EscapeDimension
 
 ## 소스로 실행·수정
 
-Python 3.10 이상을 권장하며, 동봉 실행 파일은 Python 3.12로 빌드했습니다. 소스 실행:
+Python 3.10 이상이 필요하며, 현재 소스 실행은 Python 3.14.3으로 확인했습니다. 다른 환경에서 준비하거나 라이브러리를 복구할 때:
 
 ```powershell
-py -3 -m pip install -r requirements.txt
-py -3 main.py
+python tools/setup_runtime.py
+python main.py
 ```
 
 - `main.py`: pico2d 표시·키보드·마우스·소리·UI
@@ -75,15 +83,14 @@ py -3 main.py
 - `assets/*.wav`: 원본 합성 효과음 11종
 - `tests/`: 규칙·방 시작·우회 동선·방향 판별 검사 24개
 
-외부 `levels.json` 수정은 소스 실행에 반영됩니다. **실행 파일 내부에는 빌드 당시 데이터가 포함**되어 있어, 소스나 레벨을 수정한 뒤 실행 파일에 반영하려면 다시 빌드해야 합니다.
+기본 실행은 `main.py`이므로 별도 EXE 빌드 없이 수정 사항을 확인할 수 있습니다. 기존 `EscapeDimension.exe`를 따로 실행할 때는 빌드 당시의 소스와 데이터가 사용됩니다.
 
 ## 검사
 
 ```powershell
-py -3 -m unittest discover -s tests -v
-py -3 main.py --smoke --capture gameplay.png
-py -3 main.py --self-test --test-report input-tests.json
-py -3 tools/verify_game.py --exe
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+python main.py --smoke --capture gameplay.png
+python main.py --self-test --test-report input-tests.json
 ```
 
 규칙 테스트는 위치 복원·정지·사망·탄약·낙하·엄폐·빠른 탄환 충돌·방 진행을 검사합니다. SDL 입력 검사는 이 게임의 SDL 이벤트 큐에 키·마우스 입력을 넣어 메뉴·모드·시간 이동·장전·집기·투척·재시작을 검증합니다. 다른 프로그램을 제어하지 않습니다.
@@ -92,11 +99,11 @@ py -3 tools/verify_game.py --exe
 
 ## 실행 파일 다시 빌드
 
-소스나 레벨을 바꾼 뒤에는 실행 파일을 다시 만들어야 합니다. Python 3.12 환경으로 빌드와 실행을 검증했습니다.
+EXE 배포가 필요할 때만 사용하는 선택 작업입니다. 기본 `main.py` 실행에는 PyInstaller가 필요하지 않습니다. 기존 EXE는 Python 3.12 환경으로 빌드와 실행을 검증했습니다.
 
 ```powershell
-py -3 -m pip install -r requirements-build.txt
-py -3 tools/build_game.py
+.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.venv\Scripts\python.exe tools/build_game.py
 ```
 
 완료하면 프로젝트 루트의 `EscapeDimension.exe`가 갱신됩니다. 이 파일과 빌드 캐시는 Git에서 제외하고 소스·원본 에셋·검사 기록을 커밋합니다. 변경 이력은 `CHANGELOG.md` 또는 `git log --oneline`으로 확인할 수 있습니다.

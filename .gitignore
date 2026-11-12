@@ -10,3 +10,5 @@ EscapeDimension.exe
 빌드결과/
 빌드임시/
 *.log
+.venv/
+.runtime/

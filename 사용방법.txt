@@ -1,7 +1,7 @@
 Escape Dimension — 실행 안내
 
-1. 압축 파일을 전부 해제합니다.
-2. EscapeDimension.exe를 실행합니다. Python을 별도로 설치할 필요가 없습니다.
+1. 게임의 실행 진입점은 main.py입니다.
+2. 실행.bat를 두 번 클릭하거나 게임 폴더에서 python main.py를 실행합니다.
 3. Enter로 시작하고 F1으로 조작 안내를 확인합니다.
 
 2: 좌우 이동·낙하 / 3: WASD 자유 이동 / 4: 시간 정지·과거 위치
@@ -14,8 +14,11 @@ Esc: 일시정지 / M: 소리 / 창 닫기: 종료
 
 현재는 다섯 개 방이 연결된 기능 프로토타입입니다.
 Python 소스와 상세 규칙은 README.md, 검증 결과는 verification 폴더에 있습니다.
-소스를 수정한 뒤에는 Python으로 실행하거나 빌드.bat로 다시 빌드하세요.
-빌드에는 별도로 PyInstaller가 필요합니다.
+소스와 levels.json을 수정하면 main.py를 다시 실행할 때 바로 반영됩니다.
+Python 3.14.3과 전용 .venv 환경으로 실행을 확인했습니다.
+pico2d, PySDL2, SDL DLL을 설치했으며 설치 파일은 .runtime/wheels에 있습니다.
+환경 복구 명령: python tools/setup_runtime.py
+선택 사항인 EXE 재빌드에만 PyInstaller가 필요합니다.
 
 처음에는 3을 눌러 자유 이동으로 상자 뒤를 우회해 보세요.
 3D에서 상자를 적보다 화면 위에 배치한 뒤 2를 누르면 낙하 공격이 가능합니다.
