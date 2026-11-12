@@ -146,6 +146,7 @@ class App:
             elif event.type == p.SDL_KEYUP:
                 self.keys.discard(event.key)
             elif event.type == p.SDL_KEYDOWN:
+                was_down=event.key in self.keys
                 self.keys.add(event.key)
                 key=event.key
                 if key==p.SDLK_ESCAPE:
@@ -169,6 +170,7 @@ class App:
                 elif self.game.state=="playing" and not self.paused and not self.help:
                     if key in (p.SDLK_2,p.SDLK_3,p.SDLK_4): self.game.set_mode(key-p.SDLK_0)
                     elif key==p.SDLK_r: self.game.reload()
+                    elif key==p.SDLK_SPACE and not was_down: self.game.jump()
                     elif key==p.SDLK_e: self.game.pickup()
                     elif key==p.SDLK_q: self.game.throw(self.mouse)
                     elif key==p.SDLK_LEFT: self.game.select_rewind(-1)
@@ -265,7 +267,7 @@ class App:
             self.rect(880,596,880+278*max(0,g.time_left)/10,600,PURPLE,True)
         self.text("2 평면   3 자유 이동   4 시간   E 집기   Q 던지기   F1 도움말   ESC 일시정지",286,35,16,MUTED)
         if g.mode==2:
-            self.text("A / D 좌우 이동",293,101,20,CYAN)
+            self.text("A / D 좌우 이동   ·   SPACE 점프",293,101,20,CYAN)
             self.text("같은 종이가 지금은 높이로 읽힙니다",293,72,16,MUTED)
         elif g.mode==3:
             self.text("W / A / S / D 자유 이동",293,101,20,(152,115,27))
@@ -422,7 +424,7 @@ class App:
         if self.paused:self.panel("PAUSED","시간도 함께 멈춰 있습니다",["ESC를 누르면 이어서 플레이합니다.","F1을 누르면 조작과 규칙을 확인할 수 있습니다."],"ESC  계속하기")
         if self.help:
             self.panel("조작과 규칙","모든 화면은 2D로 구현됩니다",[
-                "A/D: 2D 좌우   ·   WASD: 3D/4D 자유 이동",
+                "2D: A/D 좌우·SPACE 점프 / 3D·4D: WASD 이동",
                 "마우스 조준 / 왼쪽 발사 / R 장전 (6발 / 합계 최대 42발)",
                 "2/3/4: 모드 전환   ·   E 상자 집기 / Q 던지기",
                 "4D: 휠·방향키로 과거 선택, Enter로 위치 이동",
@@ -490,12 +492,20 @@ class App:
         # The buttons and key handlers below are the same handlers as normal play.
         mouse(p.SDL_MOUSEBUTTONDOWN,640,213);mouse(p.SDL_MOUSEBUTTONUP,640,213)
         check('title_mouse_start',self.game.state=='playing')
+        press(p.SDLK_SPACE)
+        check('space_jumps_in_2d',self.game.player.vy>0)
+        velocity=self.game.player.vy;press(p.SDLK_SPACE)
+        check('space_cannot_double_jump',self.game.player.vy==velocity)
+        for _ in range(60):self.game.tick(.02)
+        check('jump_returns_to_floor',self.game.grounded)
         press(p.SDLK_3);check('key_3_free_mode',self.game.mode==3)
+        press(p.SDLK_SPACE);check('space_does_not_jump_in_3d',self.game.player.vy==0)
         self.game.grace=100
         for _ in range(50):self.game.tick(.04,(1,.4))
         before=self.game.player.x
         press(p.SDLK_4);self.game.tick(.04)
         check('key_4_freezes_world',self.game.mode==4 and self.game.time_frozen)
+        press(p.SDLK_SPACE);check('space_does_not_jump_in_4d',self.game.player.vy==0)
         press(p.SDLK_RIGHT);press(p.SDLK_RETURN)
         check('enter_rewind_returns_3d',self.game.mode==3 and self.game.age==21 and self.game.player.x<before)
         self.game.magazine=2;self.game.reserve=20

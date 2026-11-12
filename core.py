@@ -11,6 +11,7 @@ from visuals import direction_index
 WIDTH, HEIGHT = 1280, 800
 LEFT, RIGHT, BOTTOM, TOP = 76.0, 1204.0, 154.0, 666.0
 GRAVITY = 880.0
+JUMP_SPEED = 420.0
 PLAYER_HALF = 22.0
 MAGAZINE_SIZE = 6
 MAX_AMMO = 42
@@ -159,6 +160,24 @@ class Game:
         if self.mode == 2:
             return (1.0 if dx >= 0 else -1.0), 0.0
         return unit(dx,dy)
+
+    @property
+    def grounded(self):
+        if self.mode != 2 or not self.player.alive or self.player.vy > 0:
+            return False
+        feet = self.player.y-PLAYER_HALF
+        if abs(feet-BOTTOM) <= .5:
+            return True
+        return any(abs(feet-top) <= .5 and self.player.x+15 > left
+                   and self.player.x-15 < right
+                   for left,bottom,right,top in self.solids())
+
+    def jump(self):
+        if self.state != 'playing' or not self.grounded:
+            return False
+        self.player.vy = JUMP_SPEED
+        self.events.append('jump')
+        return True
 
     def advance_deaths(self, dt):
         for actor in [self.player]+self.enemies:
@@ -440,7 +459,7 @@ class Game:
             actor.vy -= GRAVITY*dt
             dy = actor.vy*dt
         actor.y = clamp(actor.y+dy, BOTTOM+PLAYER_HALF, TOP-48)
-        if actor.y == BOTTOM+PLAYER_HALF:
+        if actor.y in (BOTTOM+PLAYER_HALF, TOP-48):
             actor.vy = 0
         for box in self.solids():
             if self.overlap(actor.box, box):

@@ -2,8 +2,13 @@
   "status": "pass",
   "checks": [
     "title_mouse_start",
+    "space_jumps_in_2d",
+    "space_cannot_double_jump",
+    "jump_returns_to_floor",
     "key_3_free_mode",
+    "space_does_not_jump_in_3d",
     "key_4_freezes_world",
+    "space_does_not_jump_in_4d",
     "enter_rewind_returns_3d",
     "key_r_reload",
     "key_e_pickup",
@@ -47,5 +52,5 @@
     "walk_changes_leg_frame",
     "reload_changes_hand_frame"
   ],
-  "count": 45
+  "count": 50
 }
