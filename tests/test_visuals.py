@@ -3,10 +3,32 @@ import unittest
 from math import cos, sin, radians
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from visuals import direction_index, atlas_region, motion_frame, torso_angle
+from visuals import direction_index, atlas_region, motion_frame, torso_angle, deform_upper_point
 
 
 class DirectionTests(unittest.TestCase):
+    def test_belt_vertices_remain_attached_at_every_aim_pitch(self):
+        for side in (-1,1):
+            for degrees in (-90,-60,-30,0,30,60,90):
+                for x in (-.4,-.1,0,.1,.4):
+                    self.assertEqual(deform_upper_point(x,-.05,radians(degrees),side),(x,-.05))
+
+    def test_head_stays_near_upright_while_aiming_arm_lifts(self):
+        angle=radians(85)
+        head=deform_upper_point(0,.4,angle,1)
+        hand=deform_upper_point(.32,.18,angle,1)
+        self.assertLess(abs(head[0]),.1)
+        self.assertGreater(head[1],.35)
+        self.assertGreater(hand[1],.4)
+
+    def test_left_and_right_rigs_are_mirrored(self):
+        for x,y in ((.1,.1),(.32,.18),(.02,.4)):
+            for degrees in (-85,-40,40,85):
+                right=deform_upper_point(x,y,radians(degrees),1)
+                left=deform_upper_point(-x,y,-radians(degrees),-1)
+                self.assertAlmostEqual(right[0],-left[0])
+                self.assertAlmostEqual(right[1],left[1])
+
     def test_torso_rotates_oppositely_for_left_and_right_side_aim(self):
         self.assertGreater(torso_angle(100,100),0)
         self.assertLess(torso_angle(100,-100),0)

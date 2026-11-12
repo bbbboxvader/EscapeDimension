@@ -1,5 +1,5 @@
 """Pure direction and atlas geometry shared by the renderer and tests."""
-from math import atan2, floor, pi
+from math import atan2, floor, pi, sin, cos
 
 DIRECTIONS = ('E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE')
 
@@ -8,6 +8,35 @@ def torso_angle(dx, dy):
     """Side-view torso pitch around the belt; legs keep their left/right pose."""
     angle=atan2(dy,max(abs(dx),.001))
     return -angle if dx<0 else angle
+
+
+def smoothstep(low, high, value):
+    t=max(0,min(1,(value-low)/(high-low)))
+    return t*t*(3-2*t)
+
+
+def deform_upper_point(x, y, angle, side):
+    """Skin a normalized sprite point: fixed belt, small chest lean, aiming arm.
+
+    Coordinates are relative to the centre of a square sprite. Vertices at or
+    below the belt stay fixed, so the upper body cannot separate from the legs.
+    """
+    waist=-.05
+    if y<=waist:
+        return x,y
+    lean=max(-.18,min(.18,angle*.15))
+    body_weight=smoothstep(waist,.18,y)
+    bend=lean*body_weight
+    px=x*cos(bend)-(y-waist)*sin(bend)
+    py=waist+x*sin(bend)+(y-waist)*cos(bend)
+    arm_weight=(smoothstep(.02,.24,side*x)*smoothstep(.04,.12,y)
+                *(1-smoothstep(.31,.39,y)))
+    shoulder_x=-(.18-waist)*sin(lean)
+    shoulder_y=waist+(.18-waist)*cos(lean)
+    turn=angle-lean
+    ax=shoulder_x+(px-shoulder_x)*cos(turn)-(py-shoulder_y)*sin(turn)
+    ay=shoulder_y+(px-shoulder_x)*sin(turn)+(py-shoulder_y)*cos(turn)
+    return px+(ax-px)*arm_weight,py+(ay-py)*arm_weight
 
 
 def direction_index(dx, dy, mode=3):

@@ -3,16 +3,18 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from math import hypot, ceil, sin, cos
+from math import hypot, ceil
 import json
 from pathlib import Path
-from visuals import direction_index, torso_angle
+from visuals import direction_index, torso_angle, deform_upper_point
 from navigation import Navigator
 
 WIDTH, HEIGHT = 1280, 800
 LEFT, RIGHT, BOTTOM, TOP = 76.0, 1204.0, 154.0, 666.0
 GRAVITY = 880.0
-JUMP_SPEED = 420.0
+JUMP_HEIGHT = 50.0
+JUMP_SPEED = (2*GRAVITY*JUMP_HEIGHT)**.5
+ENEMY_JUMP_SPEED = 420.0
 PLAYER_HALF = 22.0
 MAGAZINE_SIZE = 6
 MAX_AMMO = 42
@@ -173,8 +175,8 @@ class Game:
         if self.mode==2:
             angle=torso_angle(aim[0]-actor.x,aim[1]-actor.y-24)
             side=1 if aim[0]>=actor.x else -1
-            return (actor.x+side*27*cos(angle)-19*sin(angle),
-                    actor.y+14+side*27*sin(angle)+19*cos(angle))
+            x,y=deform_upper_point(side*27/84,15/84,angle,side)
+            return actor.x+x*84,actor.y+18+y*84
         dx,dy=unit(aim[0]-actor.x,aim[1]-actor.y-24)
         return actor.x+dx*25,actor.y+24+dy*25
 
@@ -480,8 +482,8 @@ class Game:
                 elif dx < 0: actor.x = box[2]+15
         old_y = actor.y
         if gravity:
+            dy = actor.vy*dt-.5*GRAVITY*dt*dt
             actor.vy -= GRAVITY*dt
-            dy = actor.vy*dt
         actor.y = clamp(actor.y+dy, BOTTOM+PLAYER_HALF, TOP-48)
         if actor.y in (BOTTOM+PLAYER_HALF, TOP-48):
             actor.vy = 0
@@ -562,12 +564,12 @@ class Game:
                 x1,x2=sorted((enemy.x+direction*15,enemy.x+direction*lookahead))
                 blockers=[r for r in self.solids() if r[0]<x2 and r[2]>x1
                           and r[1]<enemy.y+48 and r[3]>feet+.5]
-                max_height=JUMP_SPEED**2/(2*GRAVITY)-5
+                max_height=ENEMY_JUMP_SPEED**2/(2*GRAVITY)-5
                 jumpable=blockers and all(r[3]-feet<=max_height for r in blockers)
                 overhead=any(r[0]<enemy.x+15 and r[2]>enemy.x-15
                              and enemy.y+48<=r[1]<enemy.y+48+max_height for r in self.solids())
                 if jumpable and not overhead:
-                    enemy.vy=JUMP_SPEED
+                    enemy.vy=ENEMY_JUMP_SPEED
             dx=clamp(target_x-enemy.x,-speed*dt,speed*dt)
             self.move_actor(enemy,dx,0,dt,True)
         else:

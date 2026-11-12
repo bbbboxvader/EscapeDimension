@@ -24,12 +24,13 @@ import pico2d.pico2d as api
 from sdl2 import (SDL_SetWindowTitle, SDL_SetRenderDrawColor, SDL_RenderClear,
                   SDL_SetRenderDrawBlendMode, SDL_BLENDMODE_BLEND,
                   SDL_SetTextureAlphaMod, SDL_RenderReadPixels, SDL_PIXELFORMAT_ARGB8888,
+                  SDL_RenderGeometry, SDL_Vertex,
                   SDL_GetMouseState, SDL_WINDOWEVENT, SDL_GetWindowFlags,
                   SDL_WINDOW_INPUT_FOCUS)
 
 from core import (Game, WIDTH, HEIGHT, LEFT, RIGHT, BOTTOM, TOP, clamp,
                   MAGAZINE_SIZE, MAX_AMMO, RELOAD_DURATION, DEATH_DURATION)
-from visuals import direction_index, atlas_region, motion_frame, torso_angle
+from visuals import direction_index, atlas_region, motion_frame, torso_angle, deform_upper_point
 
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS = ROOT / "assets"
@@ -118,8 +119,33 @@ class App:
         image.clip_composite_draw(*region,angle,'',x,y,size,size)
         SDL_SetTextureAlphaMod(image.texture,255)
 
+    def upper_mesh(self, image, region, x, y, size, alpha, angle, side):
+        """Continuous textured mesh with a fixed waist and flexible arm weights."""
+        sx,sy,sw,sh=region
+        columns,rows=16,14
+        first=.45-4/sh
+        vertices=(SDL_Vertex*((columns+1)*(rows+1)))()
+        for row in range(rows+1):
+            fy=first+(1-first)*row/rows
+            for col in range(columns+1):
+                fx=col/columns
+                dx,dy=deform_upper_point(fx-.5,fy-.5,angle,side)
+                vertex=vertices[row*(columns+1)+col]
+                vertex.position.x=x+dx*size;vertex.position.y=HEIGHT-y-dy*size
+                vertex.color.r=vertex.color.g=vertex.color.b=255;vertex.color.a=alpha
+                vertex.tex_coord.x=(sx+fx*sw)/image.w
+                vertex.tex_coord.y=(image.h-sy-fy*sh)/image.h
+        indices=(ctypes.c_int*(columns*rows*6))()
+        for row in range(rows):
+            for col in range(columns):
+                a=row*(columns+1)+col;b=a+1;c=a+columns+1;d=c+1
+                offset=(row*columns+col)*6
+                for i,value in enumerate((a,b,c,b,d,c)):indices[offset+i]=value
+        if SDL_RenderGeometry(api.renderer,image.texture,vertices,len(vertices),indices,len(indices))!=0:
+            raise RuntimeError('Character mesh rendering failed')
+
     def character_layers(self, upper, lower, x, y, size=84, alpha=255, angle=0):
-        """Compose legs and torso from source cells with a pivot at the belt."""
+        """Keep the belt attached while independently animating torso and legs."""
         bottom=y-size/2
         for part,(name,frame) in (('legs',lower),('torso',upper)):
             image=self.motion_atlases[name]
@@ -134,9 +160,12 @@ class App:
                 height=size*(sh-cut+overlap)/sh
                 waist=bottom+size*.45
                 offset=height/2-size*overlap/sh
-                image.clip_composite_draw(sx,sy+cut-overlap,sw,sh-cut+overlap,angle,'',
-                                          x-math.sin(angle)*offset,
-                                          waist+math.cos(angle)*offset,size,height)
+                if abs(angle)>.001:
+                    side=1 if frame%8==0 else -1
+                    self.upper_mesh(image,(sx,sy,sw,sh),x,y,size,alpha,angle,side)
+                else:
+                    image.clip_draw(sx,sy+cut-overlap,sw,sh-cut+overlap,
+                                    x,waist+offset,size,height)
             SDL_SetTextureAlphaMod(image.texture,255)
 
     def actor(self, actor, target, player=False, alpha=255):
@@ -619,6 +648,7 @@ class App:
         check('knife_uses_blade_art',self.last_enemy_art[0]=='knife_enemy')
         knife.alive=False;knife.death_elapsed=.8;self.actor(knife,(600,340))
         check('knife_death_keeps_blade_art',self.last_enemy_art[0]=='knife_enemy')
+        self.verify_waist_connections(check)
         self.game.start()
         self.draw()
         if self.args.capture:self.screenshot(self.args.capture)
@@ -627,6 +657,43 @@ class App:
         if self.args.test_report:Path(self.args.test_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         self.motion_atlases.clear()
         del self.atlas,self.characters;p.close_canvas()
+
+    def verify_waist_connections(self, check):
+        """Read our own framebuffer and check head-to-feet silhouette continuity."""
+        from sdl2 import SDL_Rect
+        width,height=120,140
+        pixels=(ctypes.c_ubyte*(width*height*4))()
+        region=SDL_Rect(580,HEIGHT-470,width,height)
+        cases=[]
+        for facing in (0,4):
+            for degrees in (-85,-45,0,45,85):
+                cases.append((f'aim_{facing}_{degrees}',('idle',facing),('idle',facing),math.radians(degrees)))
+            for phase in (0,8):
+                cases.append((f'reload_walk_{facing}_{phase}',('reload_player',facing+8),('walk_player',facing+phase),0))
+        for name,upper,lower,angle in cases:
+            SDL_SetRenderDrawColor(api.renderer,255,0,255,255);SDL_RenderClear(api.renderer)
+            self.character_layers(upper,lower,640,400,angle=angle)
+            if SDL_RenderReadPixels(api.renderer,ctypes.byref(region),SDL_PIXELFORMAT_ARGB8888,pixels,width*4)!=0:
+                raise RuntimeError('Sprite continuity capture failed')
+            raw=bytes(pixels)
+            mask=set()
+            for y in range(height):
+                for x in range(width):
+                    i=(y*width+x)*4
+                    if abs(raw[i]-255)+raw[i+1]+abs(raw[i+2]-255)>45:
+                        mask.add((x,y))
+            largest=0;span=0
+            while mask:
+                start=mask.pop();pending=[start];count=0;lo=hi=start[1]
+                while pending:
+                    x,y=pending.pop();count+=1;lo=min(lo,y);hi=max(hi,y)
+                    for dx in (-1,0,1):
+                        for dy in (-1,0,1):
+                            point=x+dx,y+dy
+                            if point in mask:
+                                mask.remove(point);pending.append(point)
+                if count>largest:largest=count;span=hi-lo+1
+            check('waist_connected_'+name,span>=60)
 
 
 def main():
