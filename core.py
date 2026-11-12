@@ -512,6 +512,8 @@ class Game:
                 self.move_actor(e, dx*speed*dt, dy*speed*dt if self.mode != 2 else 0, dt, self.mode == 2)
             else:
                 self.move_actor(e, 0, 0, dt, self.mode == 2)
+                if self.mode == 2:
+                    e.aim_y = e.y+24
                 if self.grace <= 0 and not self.clear:
                     e.timer -= dt
                     if e.timer <= .8 and not e.winding:

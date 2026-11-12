@@ -25,7 +25,7 @@ def motion_frame(facing, distance, moving=False, reload_progress=None,
         phase = 0 if reload_progress < .45 else 1
         return 'reload_player', phase*8+facing
     if moving:
-        phase = int(distance/20) % 2
+        phase = int(distance/32) % 2
         return 'walk_enemy' if enemy else 'walk_player', phase*8+facing
     return 'idle', facing+(8 if enemy else 0)
 
