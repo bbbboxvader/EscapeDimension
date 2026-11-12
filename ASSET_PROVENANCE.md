@@ -1,5 +1,11 @@
 # 이미지와 소리 출처
 
+## 칼 추적 적
+
+`assets/knife_enemy.png`는 기존 `characters_8dir.png`를 화풍과 시점 참고 자료로 사용하여 OpenAI 내장 `image_gen` 도구로 제작했습니다. 주황색 후드·검은 장비·은색 칼을 갖춘 8방향 × 2달리기 프레임의 4열×4행 알파 투명 시트입니다. 전체 프롬프트는 [knife_enemy.prompt.txt](assets/knife_enemy.prompt.txt)에 보관합니다.
+
+상하체 분리는 기존 시트의 허리 위·아래 영역을 pico2d에서 별도로 그리는 방식입니다. 원본 이미지를 덮어쓰지 않고 상체 조준·장전과 하체 걷기를 합성합니다. 칼 적 사망 시에도 같은 칼 에셋을 유지하며 회전·하강 표현으로 쓰러집니다.
+
 ## 모션 에셋
 
 `walk_player.png`, `walk_enemy.png`, `reload_player.png`, `death_both.png`는 기존 `characters_8dir.png`를 정체성과 화풍 참고 자료로 사용하여 OpenAI 내장 `image_gen` 도구로 제작했습니다. 실제 알파 투명도를 유지한 4열×4행 시트입니다. 전체 프롬프트는 [motion_prompts.md](assets/motion_prompts.md)에 있습니다.

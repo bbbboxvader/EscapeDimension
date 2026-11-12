@@ -50,7 +50,11 @@
     "mouse_render_4d_direction_6",
     "mouse_render_4d_direction_7",
     "walk_changes_leg_frame",
-    "reload_changes_hand_frame"
+    "reload_changes_hand_frame",
+    "reload_walk_keeps_torso_and_changes_legs",
+    "two_d_torso_aims_up_and_down_without_turning_legs",
+    "knife_uses_blade_art",
+    "knife_death_keeps_blade_art"
   ],
-  "count": 50
+  "count": 54
 }

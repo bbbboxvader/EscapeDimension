@@ -1,7 +1,7 @@
 {
   "rules": {
     "status": "pass",
-    "count": 43,
+    "count": 53,
     "failures": 0,
     "errors": 0
   },
@@ -9,7 +9,7 @@
   "limitations": "Automated rule and input checks; human balance testing remains.",
   "source_input": {
     "status": "pass",
-    "count": 50,
+    "count": 54,
     "entry_point": "main.py"
   }
 }
