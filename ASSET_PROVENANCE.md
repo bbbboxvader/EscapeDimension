@@ -1,5 +1,11 @@
 # 이미지와 소리 출처
 
+## 모션 에셋
+
+`walk_player.png`, `walk_enemy.png`, `reload_player.png`, `death_both.png`는 기존 `characters_8dir.png`를 정체성과 화풍 참고 자료로 사용하여 OpenAI 내장 `image_gen` 도구로 제작했습니다. 실제 알파 투명도를 유지한 4열×4행 시트입니다. 전체 프롬프트는 [motion_prompts.md](assets/motion_prompts.md)에 있습니다.
+
+걷기 시트는 앞의 8칸이 첫 번째 발걸음, 뒤의 8칸이 반대 발걸음입니다. 장전 시트는 앞의 8칸이 탄창을 꺼내는 자세, 뒤의 8칸이 끼우는 자세입니다. 방향 순서는 모두 E, NE, N, NW, W, SW, S, SE입니다. 사망 시트는 행별로 플레이어 오른쪽·왼쪽, 적 오른쪽·왼쪽이며 열별로 피격·무릎 꺾임·주저앉음·완전한 쓰러짐입니다.
+
 ## 2026-11-13: 8방향 캐릭터
 
 `assets/characters_8dir.png`는 OpenAI 내장 `image_gen` 도구로 새로 생성한 실제 알파 투명 PNG입니다. 4열×4행이며 플레이어 8방향과 적 8방향을 담았습니다. 각 캐릭터의 순서는 E, NE, N, NW, W, SW, S, SE입니다. 원본을 재색칠하거나 좌우 반전해 방향을 대신하지 않고 방향별 이미지를 사용합니다.

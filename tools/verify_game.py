@@ -24,9 +24,9 @@ report = {'rules': {'status': 'pass' if result.wasSuccessful() else 'fail',
 if not result.wasSuccessful():
     (target / 'summary.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     raise SystemExit(1)
+input_report = target / ('exe-input-tests.json' if args.exe else 'motion-input-tests.json')
 if args.exe:
     exe = root / 'EscapeDimension.exe'
-    input_report = target / 'exe-input-tests.json'
     # Remove a previous report so a failed launch cannot appear successful.
     input_report.unlink(missing_ok=True)
     subprocess.run([str(exe), '--self-test', '--test-report', str(input_report)],
@@ -37,5 +37,13 @@ if args.exe:
     report['executable_input'] = {'status': checks['status'], 'count': checks['count']}
     report['executable_sha256'] = hashlib.sha256(exe.read_bytes()).hexdigest()
     report['executable_bytes'] = exe.stat().st_size
+else:
+    input_report.unlink(missing_ok=True)
+    subprocess.run([sys.executable,str(root/'main.py'),'--self-test','--test-report',str(input_report),
+                    '--capture',str(root/'docs'/'motion-gameplay.png')],cwd=root,check=True,timeout=60)
+    checks=json.loads(input_report.read_text(encoding='utf-8'))
+    if checks.get('status') != 'pass':
+        raise RuntimeError('Source input checks did not pass')
+    report['source_input']={'status':checks['status'],'count':checks['count'],'entry_point':'main.py'}
 (target / 'summary.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
 print(json.dumps(report, indent=2))

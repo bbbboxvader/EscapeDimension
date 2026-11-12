@@ -548,7 +548,7 @@ class App:
         first=self.player_motion
         self.game.reload_left=RELOAD_DURATION*.4;self.draw()
         check('reload_changes_hand_frame',first[0]=='reload_player' and self.player_motion!=first)
-        self.game.load_room()
+        self.game.start()
         self.draw()
         if self.args.capture:self.screenshot(self.args.capture)
         p.update_canvas()
