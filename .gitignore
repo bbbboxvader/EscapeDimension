@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+error.log
+build/
+dist/
+*.spec
+gameplay.png
+input-tests.json
