@@ -1,0 +1,16 @@
+{
+  "rules": {
+    "status": "pass",
+    "count": 24,
+    "failures": 0,
+    "errors": 0
+  },
+  "engine": "Python + pico2d",
+  "limitations": "Automated rule and input checks; human balance testing remains.",
+  "executable_input": {
+    "status": "pass",
+    "count": 24
+  },
+  "executable_sha256": "c6f53426f018068c8394649710e9854089b76e93e3249f5895217ae23379ff1e",
+  "executable_bytes": 26894163
+}
