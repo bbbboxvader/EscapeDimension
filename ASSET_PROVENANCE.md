@@ -1,5 +1,13 @@
 # 이미지와 소리 출처
 
+## 2026-11-13: 8방향 캐릭터
+
+`assets/characters_8dir.png`는 OpenAI 내장 `image_gen` 도구로 새로 생성한 실제 알파 투명 PNG입니다. 4열×4행이며 플레이어 8방향과 적 8방향을 담았습니다. 각 캐릭터의 순서는 E, NE, N, NW, W, SW, S, SE입니다. 원본을 재색칠하거나 좌우 반전해 방향을 대신하지 않고 방향별 이미지를 사용합니다.
+
+생성에 사용한 전체 프롬프트는 [characters_8dir.prompt.txt](assets/characters_8dir.prompt.txt)에 보관합니다. 맵의 점선·구역·선반·접힌 종이 모서리는 pico2d 기본 그리기로 표시합니다. 상자와 보급품은 기존 `sprites.png`를 사용합니다.
+
+## 초기 프로토타입 에셋
+
 `assets/sprites.png`는 사용자와 정한 메모지형 게임 콘셉트를 참고해 OpenAI 내장 `image_gen` 도구로 제작했습니다. 실제 알파 투명 배경을 사용하는 3열×2행 시트입니다. 배경·방 테두리·조준선·탄환·UI는 pico2d의 2D 그리기와 텍스트로 표시합니다.
 
 사용 프롬프트:

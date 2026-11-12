@@ -18,6 +18,7 @@ from sdl2 import (SDL_SetWindowTitle, SDL_SetRenderDrawColor, SDL_RenderClear,
                   SDL_WINDOW_INPUT_FOCUS)
 
 from core import Game, WIDTH, HEIGHT, LEFT, RIGHT, BOTTOM, TOP, clamp
+from visuals import direction_index, atlas_region
 
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS = ROOT / "assets"
@@ -49,6 +50,8 @@ class App:
         p.hide_cursor()
         self.atlas = p.load_image(str(ASSETS/"sprites.png"))
         self.cw, self.ch = self.atlas.w//3, self.atlas.h//2
+        self.characters = p.load_image(str(ASSETS/"characters_8dir.png"))
+        self.actor_positions = {}
         fonts = [Path("C:/Windows/Fonts/malgun.ttf"), Path(os.getenv("PICO2D_DATA_PATH", ""))/"ConsolaMalgun.TTF",
                  Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")]
         self.fontpath = next((f for f in fonts if f.is_file()), None)
@@ -64,8 +67,10 @@ class App:
                     self.sounds[name].set_volume(28 if name == "shot" else 36)
         rng = random.Random(3)
         self.grain = [(rng.randrange(65,1210),rng.randrange(143,679),rng.choice((230,235,240))) for _ in range(300)]
-        if args.smoke and args.smoke_scene != 'title':
+        if args.smoke and args.smoke_scene not in ('title','directions'):
             self.game.start()
+            self.game.room_index = args.smoke_room-1
+            self.game.load_room()
             if args.smoke_scene in ('3d','4d'):
                 self.game.set_mode(3)
                 for _ in range(100):
@@ -92,6 +97,29 @@ class App:
         SDL_SetTextureAlphaMod(self.atlas.texture, int(clamp(alpha,0,255)))
         self.atlas.clip_composite_draw(col*self.cw, (1-row)*self.ch, self.cw,self.ch,0,"h" if flip else "",x,y,size,size)
         SDL_SetTextureAlphaMod(self.atlas.texture,255)
+
+    def character_frame(self, frame, x, y, size=84, alpha=255):
+        region = atlas_region(frame, self.characters.w, self.characters.h)
+        SDL_SetTextureAlphaMod(self.characters.texture, int(clamp(alpha,0,255)))
+        self.characters.clip_draw(*region, x, y, size, size)
+        SDL_SetTextureAlphaMod(self.characters.texture,255)
+
+    def actor(self, actor, target, player=False, alpha=255):
+        dx,dy = target[0]-actor.x, target[1]-(actor.y+24)
+        facing = direction_index(dx,dy)
+        frame = facing + (0 if player else 8)
+        if player:
+            self.player_facing = facing
+        previous = self.actor_positions.get(id(actor), (actor.x,actor.y))
+        moving = math.hypot(actor.x-previous[0],actor.y-previous[1]) > .01
+        self.actor_positions[id(actor)] = actor.x,actor.y
+        bob = abs(math.sin(self.game.world_time*13))*1.5 if moving and not self.game.time_frozen else 0
+        shade = CYAN if player else RED
+        self.line(actor.x-13,actor.y-21,actor.x+13,actor.y-21,shade,70)
+        self.line(actor.x-8,actor.y-23,actor.x+8,actor.y-23,shade,35)
+        self.character_frame(frame,actor.x,actor.y+18+bob,84,alpha)
+        if not player and actor.kind == 'hunter':
+            self.text('!',actor.x-3,actor.y+70,14,(177,98,38))
 
     def events(self):
         for event in p.get_events():
@@ -163,8 +191,40 @@ class App:
         self.rect(61,146,1213,682,(255,254,249),True)
         for x,y,v in self.grain:self.line(x,y,x+1,y,(v,v-1,v-4),120)
         self.rect(LEFT,BOTTOM,RIGHT,TOP,(178,177,167))
+        for y in range(190,650,40):
+            for x in range(105,1195,40):
+                self.line(x,y,x+1,y,(209,211,204),100)
+        for y in (240,400,560):
+            p.draw_circle(69,y,3,207,205,194,200,True)
+        self.line(94,157,94,659,(213,173,160),110)
+        self.line(1177,678,1213,646,(218,214,200))
+        self.line(1177,678,1177,646,(218,214,200))
+        self.line(1177,646,1213,646,(218,214,200))
         self.text("ESCAPE DIMENSION",76,746,32)
         self.text("2D GAME PROGRAMMING / PYTHON + PICO2D",78,714,14,MUTED)
+
+    def map_details(self):
+        g=self.game
+        accent={'cyan':CYAN,'gold':(159,126,55),'purple':PURPLE}.get(g.room.get('accent'),CYAN)
+        for x1,y1,x2,y2,label in g.room.get('zones',[]):
+            self.rect(x1,y1,x2,y2,accent,True,9)
+            for x,y,sx,sy in ((x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)):
+                self.line(x,y,x+sx*15,y,accent,80)
+                self.line(x,y,x,y+sy*15,accent,80)
+            self.text(label,x1+12,y2-20,14,(157,165,161))
+        for x,y,label in g.room.get('marks',[]):
+            self.text(label,x,y,14,(162,166,157))
+        self.text(g.room.get('tag','FIELD NOTE'),92,573,14,accent)
+        self.line(92,554,300,554,accent,80)
+        self.text('IN',LEFT+19,BOTTOM+101,14,CYAN)
+        self.arrow(LEFT+25,BOTTOM+74,1,0,CYAN,22,110)
+        self.rect(RIGHT-25,BOTTOM+1,RIGHT-1,BOTTOM+90,(214,215,204),True,110)
+        self.rect(RIGHT-25,BOTTOM+1,RIGHT-1,BOTTOM+90,(156,162,151))
+        self.line(RIGHT-22,BOTTOM+85,RIGHT-4,BOTTOM+85,accent,150)
+        self.text('EXIT',RIGHT-39,BOTTOM+107,14,accent)
+        if g.mode==2:
+            self.arrow(LEFT+35,455,0,-1,accent,30,130)
+            self.text('G',LEFT+30,476,14,accent)
 
     def hud(self):
         g=self.game
@@ -215,14 +275,22 @@ class App:
 
     def world(self):
         g=self.game
+        self.map_details()
         if g.mode==4:
             points=g.rewind_points()
             for i,(_,x,y,safe) in enumerate(points):
                 p.draw_circle(x,y,15 if i==g.selected else 9,*(PURPLE if safe else RED),100,False)
-                if i==g.selected:self.sprite(0,x,y+24,90,alpha=78)
+                if i==g.selected:self.character_frame(direction_index(self.mouse[0]-x,self.mouse[1]-y-24),x,y+18,84,78)
         for rect in g.obstacles:
-            self.rect(*rect,(212,209,196),True);self.rect(*rect,(142,144,139))
-            self.line(rect[0]+4,rect[1]+3,rect[2]-4,rect[3]-3,(181,182,171))
+            x1,y1,x2,y2=rect
+            self.rect(x1+3,y1-4,x2+3,y2-4,(160,164,155),True,38)
+            self.rect(*rect,(231,229,216),True)
+            for x in range(int(x1)+5,int(x2)-8,13):
+                self.line(x,y1+3,x+7,y2-3,(191,192,177),130)
+            self.rect(*rect,(136,145,135))
+            self.line(x1+2,y2-2,x2-2,y2-2,(255,254,242))
+            for x in (x1+6,x2-6):
+                p.draw_circle(x,(y1+y2)/2,2,136,145,135,200,True)
         for pickup in g.ammo_pickups:
             self.sprite(5,*pickup,64)
         for crate in g.crates:
@@ -236,11 +304,13 @@ class App:
             if e.winding and not g.clear:
                 self.line(e.x,e.y+24,e.aim_x,e.aim_y,RED,145 if g.time_frozen else 220)
                 p.draw_circle(e.aim_x,e.aim_y,10,*RED,145,False)
-            cell=2 if e.kind=="sentry" else 3
-            self.sprite(cell,e.x,e.y+24,90,flip=g.player.x>e.x)
-        moving=any(k in self.keys for k in (p.SDLK_w,p.SDLK_a,p.SDLK_s,p.SDLK_d))
-        frame=1 if moving and int(self.ui_time*7)%2 else 0
-        self.sprite(frame,g.player.x,g.player.y+24,90,flip=self.mouse[0]<g.player.x)
+            target=(e.aim_x,e.aim_y) if e.winding else (g.player.x,g.player.y+24)
+            self.actor(e,target)
+        self.actor(g.player,self.mouse,player=True)
+        dx,dy=self.mouse[0]-g.player.x,self.mouse[1]-g.player.y-24
+        length=math.hypot(dx,dy) or 1
+        self.line(g.player.x+dx/length*39,g.player.y+24+dy/length*39,
+                  g.player.x+dx/length*47,g.player.y+24+dy/length*47,CYAN,170)
         if g.grace>0:
             p.draw_circle(g.player.x,g.player.y,35,*CYAN,100,False)
         for b in g.bullets:
@@ -283,16 +353,26 @@ class App:
         self.text("2D  좌우와 낙하",114,322,23,CYAN)
         self.text("3D  8방향 자유 이동",114,281,23,(152,115,27))
         self.text("4D  정지와 과거 위치",114,240,23,PURPLE)
-        self.sprite(0,880,399,285)
+        self.character_frame(7,880,399,285)
         self.sprite(4,1075,495,130)
-        self.sprite(2,1080,286,188)
+        self.character_frame(12,1080,286,188)
         self.rect(505,185,775,243,CYAN,True)
         self.text("Enter  게임 시작",544,215,23,(255,255,255))
         self.text("Python + pico2d   ·   F1 조작 안내   ·   ESC 종료",407,126,16,MUTED)
 
     def draw(self):
         self.background()
-        if self.game.state=="title":self.title()
+        if self.args.smoke and self.args.smoke_scene=='directions':
+            self.text('8-DIRECTION CHARACTER ATLAS',100,624,26,INK)
+            self.text('PLAYER / MOUSE AIM     ·     ENEMY / TARGET TRACKING',100,590,16,MUTED)
+            names=('E','NE','N','NW','W','SW','S','SE')
+            for i in range(8):
+                x=150+i*140
+                self.character_frame(i,x,447,132)
+                self.text(names[i],x-10,345,16,CYAN)
+                self.character_frame(i+8,x,254,132)
+            self.text('Python + pico2d / fixed camera, eight distinct facing images',100,95,18,MUTED)
+        elif self.game.state=="title":self.title()
         else:
             self.world();self.hud()
             g=self.game
@@ -355,7 +435,7 @@ class App:
                 self.running=False
             p.update_canvas();frames+=1
             time.sleep(.002)
-        del self.atlas
+        del self.atlas,self.characters
         p.close_canvas()
 
     def integration_test(self):
@@ -409,18 +489,30 @@ class App:
         self.game.age=39;press(p.SDLK_4);press(p.SDLK_3)
         check('age_40_game_over',self.game.state=='over')
         press(p.SDLK_RETURN);check('enter_full_restart',self.game.age==20 and self.game.room_index==0)
+        # Follow real SDL mouse-motion events all the way through the renderer.
+        self.game.player.x,self.game.player.y=620,340
+        for index in range(8):
+            angle=index*math.pi/4
+            x=round(620+math.cos(angle)*220)
+            y=round(364+math.sin(angle)*220)
+            event=SDL_Event();event.type=p.SDL_MOUSEMOTION
+            event.motion.type=p.SDL_MOUSEMOTION;event.motion.x=x;event.motion.y=HEIGHT-y
+            SDL_PushEvent(ctypes.byref(event));self.events();self.draw()
+            check(f'mouse_render_direction_{index}',self.player_facing==index)
+        self.game.load_room()
         self.draw()
         if self.args.capture:self.screenshot(self.args.capture)
         p.update_canvas()
         report={'status':'pass','checks':checks,'count':len(checks)}
         if self.args.test_report:Path(self.args.test_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
-        del self.atlas;p.close_canvas()
+        del self.atlas,self.characters;p.close_canvas()
 
 
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--smoke',action='store_true',help='Render a deterministic 4D frame and exit')
-    parser.add_argument('--smoke-scene',choices=['title','2d','3d','4d'],default='4d')
+    parser.add_argument('--smoke-scene',choices=['title','2d','3d','4d','directions'],default='4d')
+    parser.add_argument('--smoke-room',type=int,choices=range(1,6),default=1)
     parser.add_argument('--capture',help='Save smoke-test framebuffer to PNG')
     parser.add_argument('--self-test',action='store_true',help='Run real SDL input integration tests')
     parser.add_argument('--test-report',help='Write input test report JSON')
