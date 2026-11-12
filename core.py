@@ -6,11 +6,17 @@ from dataclasses import dataclass
 from math import hypot, ceil
 import json
 from pathlib import Path
+from visuals import direction_index
 
 WIDTH, HEIGHT = 1280, 800
 LEFT, RIGHT, BOTTOM, TOP = 76.0, 1204.0, 154.0, 666.0
 GRAVITY = 880.0
 PLAYER_HALF = 22.0
+MAGAZINE_SIZE = 6
+MAX_AMMO = 42
+RELOAD_DURATION = 1.25
+DEATH_DURATION = .8
+ENEMY_BULLET_SPEED = 320.0
 
 
 def clamp(value, low, high):
@@ -52,6 +58,10 @@ class Actor:
     aim_x: float = 0.0
     aim_y: float = 0.0
     winding: bool = False
+    facing: int = 0
+    moving: bool = False
+    walk_distance: float = 0.0
+    death_elapsed: float = 0.0
 
     @property
     def box(self):
@@ -103,8 +113,8 @@ class Game:
         self.world_time = 0.0
         self.time_left = 0.0
         self.time_frozen = False
-        self.magazine = 14
-        self.reserve = 70
+        self.magazine = MAGAZINE_SIZE
+        self.reserve = MAX_AMMO-MAGAZINE_SIZE
         self.reload_left = 0.0
         self.shot_cooldown = 0.0
         self.shots = 0
@@ -116,7 +126,7 @@ class Game:
         self.hint = ""
         self.hint_left = 0.0
         self.last_age_cost = 0
-        self.entry_ammo = (14, 70)
+        self.entry_ammo = (MAGAZINE_SIZE, MAX_AMMO-MAGAZINE_SIZE)
         self.grace = 0.0
 
     @property
@@ -135,12 +145,32 @@ class Game:
     def held(self):
         return next((c for c in self.crates if c.held), None)
 
+    @property
+    def total_ammo(self):
+        return self.magazine+self.reserve
+
+    @property
+    def death_finished(self):
+        return self.player.alive or self.player.death_elapsed >= DEATH_DURATION
+
+    def aim_direction(self, aim, actor=None):
+        actor = actor or self.player
+        dx,dy = aim[0]-actor.x, aim[1]-actor.y-24
+        if self.mode == 2:
+            return (1.0 if dx >= 0 else -1.0), 0.0
+        return unit(dx,dy)
+
+    def advance_deaths(self, dt):
+        for actor in [self.player]+self.enemies:
+            if not actor.alive:
+                actor.death_elapsed = min(DEATH_DURATION+3, actor.death_elapsed+dt)
+
     def message(self, text, seconds=2.4):
         self.hint, self.hint_left = text, seconds
 
     def start(self):
         self.age, self.room_index, self.mode = 20, 0, 2
-        self.magazine, self.reserve = 14, 70
+        self.magazine, self.reserve = MAGAZINE_SIZE, MAX_AMMO-MAGAZINE_SIZE
         self.shots = self.kills = self.total_deaths = self.streak = 0
         self.elapsed = 0.0
         self.load_room()
@@ -149,7 +179,7 @@ class Game:
         self.state = "playing"
         self.mode = 2
         self.player = Actor(*self.room.get("spawn", [160, 176]))
-        self.enemies = [Actor(float(e[0]), float(e[1]), e[2], timer=2.2+i*.45)
+        self.enemies = [Actor(float(e[0]), float(e[1]), e[2], timer=2.2+i*.45, facing=4)
                         for i, e in enumerate(self.room["enemies"])]
         self.crates = [Crate(float(x), float(y)) for x, y in self.room["crates"]]
         self.obstacles = [tuple(o) for o in self.room.get("obstacles", [])]
@@ -243,6 +273,9 @@ class Game:
             cost += 1
         self.streak += 1
         self.total_deaths += 1
+        self.player.alive = False
+        self.player.moving = False
+        self.player.death_elapsed = 0.0
         self.time_frozen = False
         self.state = "dead"
         self.age_up(cost)
@@ -263,6 +296,10 @@ class Game:
             if self.state != "playing":
                 return False
         self.mode = mode
+        if mode == 2:
+            for actor in [self.player]+self.enemies:
+                if actor.alive:
+                    actor.facing = 4 if actor.facing in (3,4,5) else 0
         self.player.vy = 0.0
         if old_mode == 2 and mode in (3, 4):
             # Height velocity does not become motion across the reinterpreted floor.
@@ -352,7 +389,7 @@ class Game:
         crate = self.held
         if not crate or self.state != "playing":
             return False
-        dx, dy = unit(aim[0]-self.player.x, aim[1]-self.player.y)
+        dx, dy = self.aim_direction(aim)
         crate.held = False
         crate.x = clamp(self.player.x+dx*48, LEFT+24, RIGHT-24)
         crate.y = clamp(self.player.y+dy*48, BOTTOM+24, TOP-24)
@@ -361,8 +398,8 @@ class Game:
         return True
 
     def reload(self):
-        if self.state == "playing" and self.magazine < 14 and self.reserve and self.reload_left <= 0:
-            self.reload_left = 1.25
+        if self.state == "playing" and self.magazine < MAGAZINE_SIZE and self.reserve and self.reload_left <= 0:
+            self.reload_left = RELOAD_DURATION
             self.events.append("reload")
             return True
         return False
@@ -374,7 +411,8 @@ class Game:
             self.message("탄창이 비었습니다. R로 장전하세요", 1.0)
             return False
         muzzle_y = self.player.y+24
-        dx, dy = unit(aim[0]-self.player.x, aim[1]-muzzle_y)
+        dx, dy = self.aim_direction(aim)
+        self.player.facing = direction_index(dx,dy,self.mode)
         self.bullets.append(Bullet(self.player.x+dx*25, muzzle_y+dy*25, dx*850, dy*850, "player"))
         self.shot_cooldown, self.magazine = .22, self.magazine-1
         self.shots += 1
@@ -390,6 +428,7 @@ class Game:
         return self.obstacles + [c.box for c in self.crates if not c.held and c is not skip]
 
     def move_actor(self, actor, dx, dy, dt, gravity=False):
+        before_x,before_y = actor.x,actor.y
         actor.x += dx
         actor.x = clamp(actor.x, LEFT+16, RIGHT-16)
         for box in self.solids():
@@ -411,6 +450,10 @@ class Game:
                     actor.y, actor.vy = box[1]-48, 0
                 elif not gravity and abs(dx) < .001:
                     actor.y = old_y
+        distance = hypot(actor.x-before_x, 0 if gravity else actor.y-before_y)
+        actor.moving = distance > .001
+        if actor.moving:
+            actor.walk_distance += distance
 
     def update_crates(self, dt):
         for c in self.crates:
@@ -449,6 +492,8 @@ class Game:
     def kill(self, enemy):
         if enemy.alive:
             enemy.alive = False
+            enemy.moving = False
+            enemy.death_elapsed = 0.0
             self.kills += 1
             self.effects.append([enemy.x, enemy.y, .45, "hit"])
             self.events.append("hit")
@@ -461,6 +506,7 @@ class Game:
             if not e.alive:
                 continue
             dx, dy = unit(self.player.x-e.x, self.player.y-e.y)
+            e.facing = direction_index(dx,dy,self.mode)
             if e.kind == "hunter":
                 speed = 76+self.room_index*8
                 self.move_actor(e, dx*speed*dt, dy*speed*dt if self.mode != 2 else 0, dt, self.mode == 2)
@@ -472,10 +518,12 @@ class Game:
                         e.winding = True
                     if e.winding and e.timer > .15:
                         e.aim_x, e.aim_y = self.player.x, self.player.y+24
+                        if self.mode == 2:
+                            e.aim_y = e.y+24
                     if e.timer <= 0:
                         if not self.blocked(e.x, e.y+24, e.aim_x, e.aim_y):
-                            ax, ay = unit(e.aim_x-e.x, e.aim_y-e.y-24)
-                            speed = 185+self.room_index*15
+                            ax, ay = self.aim_direction((e.aim_x,e.aim_y),e)
+                            speed = ENEMY_BULLET_SPEED+self.room_index*25
                             self.bullets.append(Bullet(e.x+ax*25, e.y+24+ay*25, ax*speed, ay*speed, "enemy", 6.0))
                             self.events.append("enemy_shot")
                         e.winding = False
@@ -512,9 +560,13 @@ class Game:
         self.bullets = kept
 
     def tick(self, dt, move=(0, 0), aim=(900, 300), firing=False):
+        dt = clamp(dt, 0, .05)
+        if self.state in ('dead','over'):
+            self.advance_deaths(dt)
+            return
         if self.state != "playing":
             return
-        dt = clamp(dt, 0, .05)
+        self.player.facing = direction_index(aim[0]-self.player.x,aim[1]-self.player.y-24,self.mode)
         self.elapsed += dt
         self.hint_left = max(0, self.hint_left-dt)
         self.shot_cooldown = max(0, self.shot_cooldown-dt)
@@ -541,11 +593,12 @@ class Game:
         if self.reload_left > 0:
             self.reload_left -= world_dt
             if self.reload_left <= 0:
-                take = min(14-self.magazine, self.reserve)
+                take = min(MAGAZINE_SIZE-self.magazine, self.reserve)
                 self.magazine, self.reserve = self.magazine+take, self.reserve-take
         if firing:
             self.shoot(aim)
         if world_dt > 0:
+            self.advance_deaths(world_dt)
             self.world_time += world_dt
             self.grace = max(0, self.grace-world_dt)
             self.update_crates(world_dt)
@@ -561,10 +614,14 @@ class Game:
                 self.history.popleft()
             for pickup in list(self.ammo_pickups):
                 if hypot(self.player.x-pickup[0], self.player.y-pickup[1]) < 46:
-                    self.reserve += 28
-                    self.ammo_pickups.remove(pickup)
-                    self.events.append("pickup")
-                    self.message("예비 탄약 +28")
+                    amount = min(28, max(0, MAX_AMMO-self.total_ammo))
+                    if amount:
+                        self.reserve += amount
+                        self.ammo_pickups.remove(pickup)
+                        self.events.append("pickup")
+                        self.message(f"예비 탄약 +{amount} / 최대 합계 {MAX_AMMO}발")
+                    elif self.hint_left <= 0:
+                        self.message(f"탄약이 가득 찼습니다 / 합계 {MAX_AMMO}발")
         if not any(e.alive for e in self.enemies) and not self.clear:
             self.clear = True
             self.message("방 클리어! Enter 또는 오른쪽 출구로 다음 방", 30)

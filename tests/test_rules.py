@@ -62,7 +62,7 @@ class Rules(unittest.TestCase):
         game=sandbox()
         for expected in (21,23,27,35):
             game.die();self.assertEqual(game.age,expected)
-            game.magazine=0;game.retry();self.assertEqual(game.magazine,14)
+            game.magazine=0;game.retry();self.assertEqual(game.magazine,6)
         game.die();self.assertEqual(game.state,'over');self.assertGreaterEqual(game.age,40)
         game.retry();self.assertEqual((game.age,game.room_index),(20,0))
 
@@ -76,7 +76,7 @@ class Rules(unittest.TestCase):
     def test_ammunition_conserved_during_reload(self):
         game=sandbox();game.magazine=2;game.reserve=7;self.assertTrue(game.reload())
         for _ in range(28):game.tick(.05)
-        self.assertEqual((game.magazine,game.reserve),(9,0))
+        self.assertEqual((game.magazine,game.reserve),(6,3))
         self.assertFalse(game.reload())
 
     def test_pickup_throw_and_falling_attack(self):
