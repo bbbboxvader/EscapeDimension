@@ -16,3 +16,9 @@ Escape Dimension은 Python과 pico2d로 구현한 방 단위 액션 슈팅 게�
 실행 라이브러리는 프로젝트의 `.venv`에 설치한다. `main.py`를 일반 Python으로 실행하면 준비된 프로젝트 Python을 다시 사용하도록 연결되어 있다.
 
 환경 복구는 `python tools/setup_runtime.py`로 진행한다. 다운로드한 wheel이 `.runtime/wheels`에 있으면 오프라인 설치를 우선한다. 필요한 버전은 `requirements.txt`에 명시되어 있다.
+
+## 03. 파일별 책임과 수정 위치
+
+`core.py`는 그래픽에 의존하지 않는 규칙과 상태, `main.py`는 입력·화면·효과음, `visuals.py`는 방향·프레임·상체 변형 계산을 담당한다. `navigation.py`는 적의 우회 경로를 계산한다.
+
+방 배치는 `levels.json`, 이미지는 `assets`, 검사는 `tests`에 있다. 소스 실행에서는 파일 수정 후 다시 실행해 결과를 확인한다.
