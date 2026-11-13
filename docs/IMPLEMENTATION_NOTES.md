@@ -10,3 +10,9 @@
 Escape Dimension은 Python과 pico2d로 구현한 방 단위 액션 슈팅 게임이다. 모든 표시는 2D이며, 2D·3D·4D라는 이름은 이동·중력·시간 규칙의 구분이다.
 
 게임의 기본 진입점은 `main.py`다. 프로젝트 폴더에서 `python main.py`로 실행하거나 `실행.bat`를 사용한다. 관련 안내는 [README](../README.md)에 있다.
+
+## 02. 프로젝트 전용 실행 환경
+
+실행 라이브러리는 프로젝트의 `.venv`에 설치한다. `main.py`를 일반 Python으로 실행하면 준비된 프로젝트 Python을 다시 사용하도록 연결되어 있다.
+
+환경 복구는 `python tools/setup_runtime.py`로 진행한다. 다운로드한 wheel이 `.runtime/wheels`에 있으면 오프라인 설치를 우선한다. 필요한 버전은 `requirements.txt`에 명시되어 있다.
