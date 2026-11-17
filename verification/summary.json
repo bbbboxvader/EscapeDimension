@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "status": "pass",
+    "count": 58,
+    "failures": 0,
+    "errors": 0
+  },
+  "engine": "Python + pico2d",
+  "limitations": "Automated rule and input checks; human balance testing remains.",
+  "source_input": {
+    "status": "pass",
+    "count": 68,
+    "entry_point": "main.py"
+  }
+}

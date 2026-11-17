@@ -1,0 +1,30 @@
+{
+  "status": "pass",
+  "checks": [
+    "title_mouse_start",
+    "key_3_free_mode",
+    "key_4_freezes_world",
+    "enter_rewind_returns_3d",
+    "key_r_reload",
+    "key_e_pickup",
+    "key_q_throw",
+    "mouse_aim_and_fire",
+    "f1_help",
+    "escape_closes_help",
+    "escape_pause",
+    "escape_resume",
+    "m_mutes",
+    "enter_checkpoint_retry",
+    "age_40_game_over",
+    "enter_full_restart",
+    "mouse_render_direction_0",
+    "mouse_render_direction_1",
+    "mouse_render_direction_2",
+    "mouse_render_direction_3",
+    "mouse_render_direction_4",
+    "mouse_render_direction_5",
+    "mouse_render_direction_6",
+    "mouse_render_direction_7"
+  ],
+  "count": 24
+}

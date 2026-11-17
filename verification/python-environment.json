@@ -1,0 +1,16 @@
+{
+  "python": "3.14.3",
+  "entry_point": "main.py",
+  "interpreter": ".venv/Scripts/python.exe",
+  "packages": {
+    "pico2d": "1.5.1",
+    "PySDL2": "0.9.17",
+    "PySDL2-DLL": "2.32.10"
+  },
+  "pip_check": "pass",
+  "rules": {
+    "status": "pass",
+    "count": 24
+  },
+  "input_report": "python-input-tests.json"
+}

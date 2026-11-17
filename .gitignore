@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+error.log
+build/
+dist/
+*.spec
+gameplay.png
+input-tests.json
+EscapeDimension.exe
+빌드결과/
+빌드임시/
+*.log
+.venv/
+.runtime/
