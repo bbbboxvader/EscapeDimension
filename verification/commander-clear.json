@@ -1,0 +1,14 @@
+{
+  "state": "won",
+  "window_hp": 0,
+  "seconds": 13.23,
+  "shots": 36,
+  "deaths": 0,
+  "sides_seen": [
+    "bottom",
+    "left",
+    "right",
+    "top"
+  ],
+  "age": 20
+}

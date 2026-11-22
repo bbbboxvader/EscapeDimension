@@ -1,5 +1,13 @@
 # 이미지와 소리 출처
 
+## 2026-11-22: 기관총 사수와 관제창
+
+`assets/elite_gunner.png`는 OpenAI 내장 `image_gen` 도구로 제작한 RGBA 투명 시트입니다. 4열×4행이며 앞 8칸은 8방향 대기, 뒤 8칸은 같은 순서의 기관총 발사 자세입니다. 인간 엘리트 군인의 전술복·헬멧·고글·벨트 급탄식 기관총을 표현했습니다. 최종 프롬프트는 [elite_gunner.prompt.txt](assets/elite_gunner.prompt.txt)에 있습니다.
+
+`assets/commander_window.png`는 같은 내장 도구로 제작한 1열×4행 투명 시트입니다. 관제실 창 뒤의 인간 사령관과 정상·균열·심한 균열·파괴 상태를 담았습니다. 최종 프롬프트는 [commander_window.prompt.txt](assets/commander_window.prompt.txt)에 있습니다. 매 타격의 작은 균열과 유리 파편은 게임 코드로 표시합니다.
+
+기관총, 유리 타격·파괴, 레이저 예고·발사 효과음은 `tools/generate_combat_sounds.py`의 파형·잡음 합성으로 제작했습니다. 외부 음원을 사용하지 않습니다.
+
 ## 2026-11-22: 유탄병과 보스
 
 `assets/special_enemies.png`는 기존 캐릭터 시트를 화풍 참고로 사용하고 OpenAI 내장 `image_gen` 도구로 제작한 실제 RGBA 투명 스프라이트입니다. 유탄병, 중간보스, 최종보스 각각의 8방향을 담은 4열×6행 시트입니다. 방향은 두 행씩 E·NE·N·NW / W·SW·S·SE 순입니다. 최종 프롬프트는 [special_enemies.prompt.txt](assets/special_enemies.prompt.txt)에 보관합니다.

@@ -1,7 +1,7 @@
 {
   "rules": {
     "status": "pass",
-    "count": 82,
+    "count": 98,
     "failures": 0,
     "errors": 0
   },
@@ -11,15 +11,34 @@
     "status": "pass",
     "count": 68
   },
-  "executable_sha256": "ab607eec816a0f7cde8439155859a9273796bcbf5d5d3a6f68e1b8232bcea4b7",
-  "executable_bytes": 35335716,
+  "executable_sha256": "0029251ef4b703d4c0da01b229c2191776d9db137abf501c3248842cead9a350",
+  "executable_bytes": 39262602,
   "source_input": {
     "status": "pass",
-    "count": 68
+    "count": 68,
+    "entry_point": "main.py"
   },
   "campaign_input": {
     "status": "pass",
     "count": 22
+  },
+  "boss_input": {
+    "status": "pass",
+    "count": 47
+  },
+  "commander_clear": {
+    "state": "won",
+    "window_hp": 0,
+    "seconds": 13.23,
+    "shots": 36,
+    "deaths": 0,
+    "sides_seen": [
+      "bottom",
+      "left",
+      "right",
+      "top"
+    ],
+    "age": 20
   },
   "chapters": 12
 }
