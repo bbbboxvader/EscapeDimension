@@ -461,8 +461,8 @@ class App:
                 self.line(a,b,c,d,RED,230 if laser.active else 90)
         x,y=point(g.player.x,g.player.y);p.draw_circle(x,y,3,*CYAN,255,True)
         corners=[self.camera.to_world(x,y) for x,y in ((LEFT,BOTTOM),(LEFT,TOP),(RIGHT,BOTTOM),(RIGHT,TOP))]
-        a,b=point(min(p[0] for p in corners),min(p[1] for p in corners))
-        c,d=point(max(p[0] for p in corners),max(p[1] for p in corners))
+        a,b=point(clamp(min(p[0] for p in corners),ml,mr),clamp(min(p[1] for p in corners),mb,mt))
+        c,d=point(clamp(max(p[0] for p in corners),ml,mr),clamp(max(p[1] for p in corners),mb,mt))
         self.rect(a,b,c,d,CYAN,False,180)
         self.text('LASER CHAMBER' if g.command_window else 'MAP / 갈색 벽: 폭발로 파괴',1014,130,14,MUTED)
 
@@ -589,8 +589,17 @@ class App:
         if g.command_window:self.draw_command_window()
         self.actor(g.player,self.mouse,player=True)
         if g.player.alive:
-            dx,dy=g.aim_direction(self.mouse)
-            muzzle_x,muzzle_y=g.muzzle_position(self.mouse)
+            scale=self.scene_scale
+            ax,ay=self.mouse[0]-g.player.x,self.mouse[1]-g.player.y-24*scale
+            if g.mode==2:
+                side=1 if ax>=0 else -1
+                ox,oy=deform_upper_point(side*27/84,15/84,torso_angle(ax,ay),side)
+                muzzle_x,muzzle_y=g.player.x+ox*84*scale,g.player.y+(18+oy*84)*scale
+            else:
+                length=math.hypot(ax,ay) or 1
+                muzzle_x,muzzle_y=g.player.x+ax/length*25*scale,g.player.y+(24+ay/length*25)*scale
+            ax,ay=self.mouse[0]-muzzle_x,self.mouse[1]-muzzle_y
+            length=math.hypot(ax,ay) or 1;dx,dy=ax/length,ay/length
             self.line(muzzle_x+dx*12,muzzle_y+dy*12,
                       muzzle_x+dx*20,muzzle_y+dy*20,CYAN,170)
         if g.grace>0 and g.player.alive:
@@ -604,16 +613,16 @@ class App:
         for laser in g.lasers:self.draw_laser(laser)
         for grenade in g.grenades:
             bomb_color=CYAN if grenade.redirected else RED
-            lift=(max(0,math.sin(math.pi*min(1,grenade.age/grenade.flight_time)))*65 if g.mode!=2 else 0)
+            lift=(max(0,math.sin(math.pi*min(1,grenade.age/grenade.flight_time)))*65*self.scene_scale if g.mode!=2 else 0)
             landing=max(0,grenade.flight_time-grenade.age)
             tx,ty=grenade.x+grenade.vx*landing,grenade.y+grenade.vy*landing
-            if g.mode==2:ty-=.5*880*.75*landing*landing
+            if g.mode==2:ty-=.5*880*.75*landing*landing*self.scene_scale
             p.draw_circle(tx,ty,round(grenade.radius*.7),*bomb_color,95,False)
             self.line(tx-8,ty,tx+8,ty,RED,150)
             self.line(tx,ty-8,tx,ty+8,RED,150)
             self.line(grenade.x,grenade.y,grenade.x,grenade.y+lift,(151,111,39),90)
-            p.draw_circle(grenade.x,grenade.y+lift,8,43,48,40,255,True)
-            p.draw_circle(grenade.x,grenade.y+lift,5,230,154,45,255,True)
+            p.draw_circle(grenade.x,grenade.y+lift,max(2,round(8*self.scene_scale)),43,48,40,255,True)
+            p.draw_circle(grenade.x,grenade.y+lift,max(1,round(5*self.scene_scale)),230,154,45,255,True)
             self.text(('반사 ' if grenade.redirected else '')+f'{max(0,grenade.fuse):.1f}',grenade.x+10,grenade.y+lift+8,14,bomb_color)
         for blast in g.blasts:
             progress=1-blast.life/.55
@@ -654,10 +663,13 @@ class App:
         if window.hp>0:
             hits=(window.max_hp-window.hp)%12
             for i in range(hits):
-                x=l+35+(i*67+42)%max(1,int(r-l-70))
-                y=b+25+(i*41+13)%max(1,int(t-b-50))
+                ox=(-.4+((i*67+42)%331)/331*.8)*width
+                oy=(-.28+((i*41+13)%79)/79*.56)*height
+                ox,oy=turn_point(ox,oy,self.game.view_turn)
+                x,y=(l+r)/2+ox,(b+t)/2+oy
                 for angle in (i*.8,i*.8+2.1,i*.8+4.2):
-                    length=8+i%4*3
+                    angle-=self.game.view_turn*math.pi/2
+                    length=(8+i%4*3)*self.scene_scale
                     self.line(x,y,x+math.cos(angle)*length,y+math.sin(angle)*length,(199,233,241),220)
             if window.hit_flash:
                 self.rect(l+8,b+8,r-8,t-8,(172,230,246),False,round(255*window.hit_flash/.18))
