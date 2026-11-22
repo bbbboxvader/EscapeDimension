@@ -15,7 +15,7 @@ class RoomEntryTests(unittest.TestCase):
         return game
 
     def test_all_rooms_start_without_overlap_or_dead_enemies(self):
-        for index in range(5):
+        for index in range(len(Game().levels)):
             with self.subTest(room=index+1):
                 game = self.room(index)
                 self.assertEqual(game.layout_errors(), [])
@@ -24,7 +24,7 @@ class RoomEntryTests(unittest.TestCase):
                 self.assertEqual(game.kills, 0)
 
     def test_no_enemy_dies_from_passive_startup_gravity_in_any_room(self):
-        for index in range(5):
+        for index in range(len(Game().levels)):
             with self.subTest(room=index+1):
                 game = self.room(index)
                 initial = len(game.enemies)
@@ -36,7 +36,7 @@ class RoomEntryTests(unittest.TestCase):
                 self.assertEqual(game.state, 'playing')
 
     def test_retry_recreates_all_enemies_without_world_progress(self):
-        for index in range(5):
+        for index in range(len(Game().levels)):
             game = self.room(index)
             game.kill(game.enemies[0])
             game.die()
@@ -48,7 +48,7 @@ class RoomEntryTests(unittest.TestCase):
             self.assertEqual(game.layout_errors(), [])
 
     def test_initial_crates_rest_on_a_real_support(self):
-        for index in range(5):
+        for index in range(len(Game().levels)):
             game = self.room(index)
             before = [(c.x, c.y) for c in game.crates]
             for _ in range(20):
@@ -68,11 +68,11 @@ class RoomEntryTests(unittest.TestCase):
 
     def test_free_mode_has_route_from_spawn_to_upper_and_exit_areas(self):
         step = 20
-        for index in range(5):
+        for index in range(len(Game().levels)):
             game = self.room(index)
             def clear(x, y):
                 box = (x-16, y-23, x+16, y+49)
-                return (LEFT+16 <= x <= RIGHT-16 and BOTTOM+22 <= y <= TOP-49
+                return (game.left+16 <= x <= game.right-16 and game.bottom+22 <= y <= game.top-49
                         and not any(game.overlap(box, r) for r in game.solids()))
             start = (int(game.player.x), int(game.player.y))
             todo, seen = deque([start]), {start}
@@ -83,8 +83,8 @@ class RoomEntryTests(unittest.TestCase):
                     if point not in seen and clear(*point):
                         seen.add(point)
                         todo.append(point)
-            self.assertTrue(any(y > 540 for x,y in seen), f'room {index+1}: upper route')
-            self.assertTrue(any(x > 1160 for x,y in seen), f'room {index+1}: exit route')
+            self.assertTrue(any(y > game.top-120 for x,y in seen), f'chapter {index+1}: upper route')
+            self.assertTrue(any(x > game.right-50 for x,y in seen), f'chapter {index+1}: exit route')
 
 
 if __name__ == '__main__':

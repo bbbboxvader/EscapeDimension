@@ -91,14 +91,14 @@ class JumpTests(unittest.TestCase):
         self.assertTrue(game.grounded)
 
     def test_top_boundary_does_not_leave_player_hanging(self):
-        game=arena();top=TOP-90
+        game=arena();top=game.top-90
         game.obstacles=[(100,top-16,210,top)]
         game.player.y=top+PLAYER_HALF
         self.assertTrue(game.jump())
         hit_ceiling=False
         for _ in range(60):
             game.tick(.02)
-            if game.player.y==TOP-48:
+            if game.player.y==game.top-48:
                 hit_ceiling=True
                 self.assertEqual(game.player.vy,0)
         self.assertTrue(hit_ceiling)

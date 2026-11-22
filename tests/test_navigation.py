@@ -66,7 +66,7 @@ class PursuitTests(unittest.TestCase):
         self.assertGreater(e.x,600)
 
     def test_inaccessible_wall_does_not_cause_clipping(self):
-        g=arena();e=g.enemies[0];g.obstacles=[(500,BOTTOM,560,TOP)]
+        g=arena();e=g.enemies[0];g.obstacles=[(500,g.bottom,560,g.top)]
         for _ in range(50):g.tick(.02)
         self.assertLess(e.x,485)
         self.assertFalse(g.overlap(e.box,g.obstacles[0]))

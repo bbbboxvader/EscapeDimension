@@ -4,10 +4,10 @@ from math import hypot
 
 
 class Navigator:
-    def __init__(self, solids, bounds, segment_test):
+    def __init__(self, solids, bounds, segment_test, half_width=15, head_height=48):
         self.bounds=bounds
         self.segment_test=segment_test
-        self.rects=[(l-15,b-48,r+15,t+22) for l,b,r,t in solids]
+        self.rects=[(l-half_width,b-head_height,r+half_width,t+22) for l,b,r,t in solids]
         self.corners=[]
         for l,b,r,t in self.rects:
             for point in ((l-2,b-2),(l-2,t+2),(r+2,b-2),(r+2,t+2)):

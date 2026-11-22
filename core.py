@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from math import hypot, ceil
+from math import hypot, ceil, sin, cos, atan2, pi
 import json
 from pathlib import Path
 from visuals import direction_index, torso_angle, deform_upper_point
@@ -22,6 +22,8 @@ RELOAD_DURATION = 1.25
 DEATH_DURATION = .8
 ENEMY_BULLET_SPEED = 320.0
 KNIFE_SPEED = 420.0
+BLAST_RADIUS = 148.0
+BOSS_KINDS = ('midboss', 'finalboss')
 
 
 def clamp(value, low, high):
@@ -71,11 +73,29 @@ class Actor:
     nav_left: float = 0.0
     nav_revision: int = -1
     nav_goal: tuple = (0.0,0.0)
+    hp: int = 1
+    max_hp: int = 1
+    alerted: bool = True
+    attack_cycle: int = 0
+    phase: int = 1
+    hurt_left: float = 0.0
+
+    def __post_init__(self):
+        if self.kind in BOSS_KINDS and self.max_hp == 1:
+            self.hp = self.max_hp = 18 if self.kind == 'midboss' else 36
+
+    @property
+    def half_width(self):
+        return 32 if self.kind == 'finalboss' else 26 if self.kind == 'midboss' else 15
+
+    @property
+    def head_height(self):
+        return 92 if self.kind == 'finalboss' else 74 if self.kind == 'midboss' else 48
 
     @property
     def box(self):
         # y is the foot anchor plus 22px. Include the sprite's head and torso.
-        return self.x-15, self.y-22, self.x+15, self.y+48
+        return self.x-self.half_width, self.y-22, self.x+self.half_width, self.y+self.head_height
 
 
 @dataclass
@@ -85,6 +105,7 @@ class Crate:
     vx: float = 0.0
     vy: float = 0.0
     held: bool = False
+    hit_actors: set = field(default_factory=set)
 
     @property
     def box(self):
@@ -101,19 +122,55 @@ class Bullet:
     life: float = 3.0
 
 
+@dataclass
+class Grenade:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    fuse: float = 1.6
+    radius: float = BLAST_RADIUS
+    age: float = 0.0
+    flight_time: float = 1.0
+    source: Actor | None = None
+
+
+@dataclass
+class Blast:
+    x: float
+    y: float
+    radius: float
+    life: float = .55
+
+
+@dataclass
+class Fragment:
+    x: float
+    y: float
+    vx: float
+    vy: float
+    life: float = .8
+
+
 class Game:
     def __init__(self, level_path=None):
         level_path = level_path or Path(__file__).with_name("levels.json")
         self.levels = json.loads(Path(level_path).read_text(encoding="utf-8"))["rooms"]
+        self.bounds = (LEFT, BOTTOM, RIGHT, TOP)
         self.state = "title"
         self.age = 20
         self.room_index = 0
         self.mode = 2
-        self.player = Actor(160.0, BOTTOM+PLAYER_HALF)
+        self.player = Actor(160.0, self.bottom+PLAYER_HALF)
         self.enemies = []
         self.crates = []
         self.bullets = []
+        self.grenades = []
+        self.blasts = []
+        self.fragments = []
         self.obstacles = []
+        self.reinforced = set()
+        self.destroyed_cover = 0
         self.ammo_pickups = []
         self.effects = []
         self.events = []
@@ -139,11 +196,24 @@ class Game:
         self.grace = 0.0
         self._nav_signature = None
         self._navigator = None
+        self._nav_cache = {}
         self._nav_revision = 0
 
     @property
     def room(self):
         return self.levels[self.room_index]
+
+    @property
+    def left(self): return self.bounds[0]
+
+    @property
+    def bottom(self): return self.bounds[1]
+
+    @property
+    def right(self): return self.bounds[2]
+
+    @property
+    def top(self): return self.bounds[3]
 
     @property
     def speed(self):
@@ -188,10 +258,10 @@ class Game:
         if self.mode != 2 or not actor.alive or actor.vy > 0:
             return False
         feet = actor.y-PLAYER_HALF
-        if abs(feet-BOTTOM) <= .5:
+        if abs(feet-self.bottom) <= .5:
             return True
-        return any(abs(feet-top) <= .5 and actor.x+15 > left
-                   and actor.x-15 < right
+        return any(abs(feet-top) <= .5 and actor.x+actor.half_width > left
+                   and actor.x-actor.half_width < right
                    for left,bottom,right,top in self.solids())
 
     def jump(self):
@@ -218,18 +288,22 @@ class Game:
 
     def load_room(self, retry=False):
         self.state = "playing"
+        self.bounds = tuple(self.room.get("bounds", (LEFT, BOTTOM, RIGHT, TOP)))
         self.mode = 2
         self.player = Actor(*self.room.get("spawn", [160, 176]))
-        self.enemies = [Actor(float(e[0]), float(e[1]), e[2], timer=2.2+i*.45, facing=4)
+        self.enemies = [Actor(float(e[0]), float(e[1]), e[2], timer=2.2+i*.45, facing=4, alerted=False)
                         for i, e in enumerate(self.room["enemies"])]
         self.crates = [Crate(float(x), float(y)) for x, y in self.room["crates"]]
         self.obstacles = [tuple(o) for o in self.room.get("obstacles", [])]
+        self.reinforced = {tuple(o) for o in self.room.get('reinforced', [])}
         self.ammo_pickups = [list(p) for p in self.room.get("ammo", [])]
         self.settle_initial_layout()
         errors = self.layout_errors()
         if errors:
             raise ValueError(f"Invalid room {self.room_index+1}: " + "; ".join(errors))
         self.bullets, self.effects, self.events = [], [], []
+        self.grenades, self.blasts, self.fragments = [], [], []
+        self.destroyed_cover = 0
         self.history.clear()
         self.world_time = 0.0
         self.time_left = 0.0
@@ -238,6 +312,7 @@ class Game:
         self.clear = False
         self.grace = 1.2
         self._nav_signature = None
+        self._nav_cache = {}
         if retry:
             self.magazine, self.reserve = self.entry_ammo
         else:
@@ -252,14 +327,14 @@ class Game:
             tops = [r[3] for r in supports
                     if crate.x+23 > r[0] and crate.x-23 < r[2]
                     and r[3] <= crate.y-23+.5]
-            crate.y = max([BOTTOM] + tops) + 23
+            crate.y = max([self.bottom] + tops) + 23
             crate.vx = crate.vy = 0.0
             supports.append(crate.box)
         for actor in [self.player] + self.enemies:
             tops = [r[3] for r in supports
-                    if actor.x+15 > r[0] and actor.x-15 < r[2]
+                    if actor.x+actor.half_width > r[0] and actor.x-actor.half_width < r[2]
                     and r[3] <= actor.y-PLAYER_HALF+.5]
-            actor.y = max([BOTTOM] + tops) + PLAYER_HALF
+            actor.y = max([self.bottom] + tops) + PLAYER_HALF
             actor.vy = 0.0
 
     def layout_errors(self):
@@ -269,7 +344,7 @@ class Game:
         for index, actor in enumerate(actors):
             label = "player" if index == 0 else f"enemy {index}"
             x1,y1,x2,y2 = actor.box
-            if x1 < LEFT or x2 > RIGHT or y1 < BOTTOM-.5 or y2 > TOP:
+            if x1 < self.left or x2 > self.right or y1 < self.bottom-.5 or y2 > self.top:
                 errors.append(f"{label} outside room")
             if any(self.overlap(actor.box, rect) for rect in self.solids()):
                 errors.append(f"{label} overlaps cover")
@@ -277,7 +352,7 @@ class Game:
                 errors.append(f"{label} overlaps another actor")
         for index, crate in enumerate(self.crates):
             x1,y1,x2,y2 = crate.box
-            if x1 < LEFT or x2 > RIGHT or y1 < BOTTOM-.5 or y2 > TOP:
+            if x1 < self.left or x2 > self.right or y1 < self.bottom-.5 or y2 > self.top:
                 errors.append(f"crate {index+1} outside room")
             if any(self.overlap(crate.box, rect) for rect in self.solids(skip=crate)):
                 errors.append(f"crate {index+1} overlaps cover")
@@ -368,14 +443,14 @@ class Game:
         self.events.append("switch")
 
     def safe_position(self, x, y):
-        if not LEFT+16 <= x <= RIGHT-16 or not BOTTOM+PLAYER_HALF <= y <= TOP-48:
+        if not self.left+16 <= x <= self.right-16 or not self.bottom+PLAYER_HALF <= y <= self.top-48:
             return False
         box = (x-14, y-21, x+14, y+47)
         if any(self.overlap(box, r) for r in self.obstacles):
             return False
         if any(not c.held and self.overlap(box, c.box) for c in self.crates):
             return False
-        return not any(e.alive and hypot(x-e.x, y-e.y) < 38 for e in self.enemies)
+        return not any(e.alive and (self.overlap(box,e.box) or hypot(x-e.x,y-e.y)<38) for e in self.enemies)
 
     def rewind_points(self):
         if not self.history:
@@ -416,7 +491,7 @@ class Game:
     def pickup(self):
         if self.state != "playing":
             return False
-        if self.clear and self.player.x > RIGHT-110:
+        if self.clear and self.player.x > self.right-110:
             return self.next_room()
         if self.held:
             self.message("Q로 물체를 던질 수 있습니다")
@@ -427,6 +502,7 @@ class Game:
             return False
         crate = min(near, key=lambda c: hypot(c.x-self.player.x, c.y-self.player.y))
         crate.held, crate.vx, crate.vy = True, 0.0, 0.0
+        crate.hit_actors.clear()
         self.events.append("pickup")
         return True
 
@@ -436,8 +512,8 @@ class Game:
             return False
         dx, dy = self.aim_direction(aim)
         crate.held = False
-        crate.x = clamp(self.player.x+dx*48, LEFT+24, RIGHT-24)
-        crate.y = clamp(self.player.y+dy*48, BOTTOM+24, TOP-24)
+        crate.x = clamp(self.player.x+dx*48, self.left+24, self.right-24)
+        crate.y = clamp(self.player.y+dy*48, self.bottom+24, self.top-24)
         crate.vx, crate.vy = dx*480, dy*480+(100 if self.mode == 2 else 0)
         self.events.append("throw")
         return True
@@ -475,24 +551,24 @@ class Game:
     def move_actor(self, actor, dx, dy, dt, gravity=False):
         before_x,before_y = actor.x,actor.y
         actor.x += dx
-        actor.x = clamp(actor.x, LEFT+16, RIGHT-16)
+        actor.x = clamp(actor.x, self.left+actor.half_width+1, self.right-actor.half_width-1)
         for box in self.solids():
             if self.overlap(actor.box, box):
-                if dx > 0: actor.x = box[0]-15
-                elif dx < 0: actor.x = box[2]+15
+                if dx > 0: actor.x = box[0]-actor.half_width
+                elif dx < 0: actor.x = box[2]+actor.half_width
         old_y = actor.y
         if gravity:
             dy = actor.vy*dt-.5*GRAVITY*dt*dt
             actor.vy -= GRAVITY*dt
-        actor.y = clamp(actor.y+dy, BOTTOM+PLAYER_HALF, TOP-48)
-        if actor.y in (BOTTOM+PLAYER_HALF, TOP-48):
+        actor.y = clamp(actor.y+dy, self.bottom+PLAYER_HALF, self.top-actor.head_height)
+        if actor.y in (self.bottom+PLAYER_HALF, self.top-actor.head_height):
             actor.vy = 0
         for box in self.solids():
             if self.overlap(actor.box, box):
                 if dy < 0 and (not gravity or old_y-PLAYER_HALF >= box[3]-.5):
                     actor.y, actor.vy = box[3]+PLAYER_HALF, 0
                 elif dy > 0:
-                    actor.y, actor.vy = box[1]-48, 0
+                    actor.y, actor.vy = box[1]-actor.head_height, 0
                 elif not gravity and abs(dx) < .001:
                     actor.y = old_y
         distance = hypot(actor.x-before_x, 0 if gravity else actor.y-before_y)
@@ -503,7 +579,7 @@ class Game:
     def update_crates(self, dt):
         for c in self.crates:
             if c.held:
-                c.x, c.y = self.player.x, min(TOP-24, self.player.y+49)
+                c.x, c.y = self.player.x, min(self.top-24, self.player.y+49)
                 continue
             if self.mode == 2:
                 c.vy -= GRAVITY*dt
@@ -515,14 +591,15 @@ class Game:
             c.y += c.vy*dt
             impact = hypot(c.vx, c.vy)
             for enemy in self.enemies:
-                if enemy.alive and impact > 125 and self.overlap(c.box, enemy.box):
-                    self.kill(enemy)
-            if c.y < BOTTOM+23:
-                c.y, c.vy, c.vx = BOTTOM+23, 0.0, c.vx*.72
-            if c.x < LEFT+23 or c.x > RIGHT-23:
-                c.x, c.vx = clamp(c.x, LEFT+23, RIGHT-23), -c.vx*.3
-            if c.y > TOP-23:
-                c.y, c.vy = TOP-23, 0
+                if enemy.alive and impact > 125 and id(enemy) not in c.hit_actors and self.overlap(c.box, enemy.box):
+                    c.hit_actors.add(id(enemy))
+                    self.damage_enemy(enemy, 6 if enemy.kind in BOSS_KINDS else 1)
+            if c.y < self.bottom+23:
+                c.y, c.vy, c.vx = self.bottom+23, 0.0, c.vx*.72
+            if c.x < self.left+23 or c.x > self.right-23:
+                c.x, c.vx = clamp(c.x, self.left+23, self.right-23), -c.vx*.3
+            if c.y > self.top-23:
+                c.y, c.vy = self.top-23, 0
             for box in self.solids(skip=c):
                 if self.overlap(c.box, box):
                     if old_y-23 >= box[3]-.5 and c.vy <= 0:
@@ -536,6 +613,7 @@ class Game:
 
     def kill(self, enemy):
         if enemy.alive:
+            enemy.hp = 0
             enemy.alive = False
             enemy.moving = False
             enemy.death_elapsed = 0.0
@@ -543,14 +621,96 @@ class Game:
             self.effects.append([enemy.x, enemy.y, .45, "hit"])
             self.events.append("hit")
 
+    def damage_enemy(self, enemy, amount=1):
+        if not enemy.alive:
+            return
+        enemy.alerted = True
+        enemy.hp = max(0, enemy.hp-amount)
+        enemy.hurt_left = .18
+        if not enemy.hp:
+            self.kill(enemy)
+        else:
+            self.effects.append([enemy.x, enemy.y+25, .18, 'hit'])
+            self.events.append('hit')
+
+    @staticmethod
+    def distance_to_rect(x, y, rect):
+        return hypot(x-clamp(x,rect[0],rect[2]),y-clamp(y,rect[1],rect[3]))
+
+    def explode(self, grenade):
+        """Near-cover blast tests use the nearest edge, not the wall centre."""
+        x,y,radius = grenade.x,grenade.y,grenade.radius
+        removed=[r for r in self.obstacles if r not in self.reinforced
+                 and self.distance_to_rect(x,y,r)<=radius]
+        self.obstacles=[r for r in self.obstacles if r not in removed]
+        broken=[c for c in self.crates if self.distance_to_rect(x,y,c.box)<=radius]
+        self.crates=[c for c in self.crates if c not in broken]
+        self.destroyed_cover += len(removed)+len(broken)
+        if removed or broken:
+            self._nav_signature = None
+            self._nav_cache.clear()
+            for e in self.enemies:
+                e.route.clear();e.nav_left=0
+            for i,r in enumerate(removed+[c.box for c in broken]):
+                for j in range(5):
+                    angle=(i*1.1+j*1.7)% (2*pi)
+                    self.fragments.append(Fragment((r[0]+r[2])/2,(r[1]+r[3])/2,
+                                                   cos(angle)*(95+j*22),sin(angle)*160+80))
+        # The owner is immune to its own blast; other enemies can be caught in it.
+        for enemy in self.enemies:
+            if enemy.alive and enemy is not grenade.source and self.distance_to_rect(x,y,enemy.box)<=radius*.7:
+                self.damage_enemy(enemy,4 if enemy.kind in BOSS_KINDS else 1)
+        if self.grace<=0 and self.distance_to_rect(x,y,self.player.box)<=radius*.7:
+            self.die()
+        self.blasts.append(Blast(x,y,radius))
+        self.events.append('explosion')
+
+    def launch_grenade(self, enemy, target=None):
+        tx,ty=target or (enemy.aim_x,enemy.aim_y)
+        sx,sy=self.muzzle_position((tx,ty),enemy)
+        flight=clamp(hypot(tx-sx,ty-sy)/470,.55,1.3)
+        vx,vy=(tx-sx)/flight,(ty-sy)/flight
+        if self.mode==2:vy+=.5*GRAVITY*.75*flight
+        self.grenades.append(Grenade(sx,sy,vx,vy,flight+.45,BLAST_RADIUS,
+                                     flight_time=flight,source=enemy))
+        self.events.append('grenade')
+
+    def update_grenades(self, dt):
+        kept=[]
+        for grenade in self.grenades:
+            grenade.age+=dt;grenade.fuse-=dt
+            if grenade.age>=grenade.flight_time and self.mode!=2:
+                grenade.vx=grenade.vy=0
+            nx,ny=grenade.x+grenade.vx*dt,grenade.y+grenade.vy*dt
+            if self.mode==2:
+                ny-=.5*GRAVITY*.75*dt*dt
+                grenade.vy-=GRAVITY*.75*dt
+            contact=min((t for r in self.solids()
+                         if (t:=segment_box(grenade.x,grenade.y,nx,ny,r,7)) is not None),default=2.)
+            edge=not self.left+7<nx<self.right-7 or not self.bottom+7<ny<self.top-7
+            if contact<=1:
+                grenade.x+=(nx-grenade.x)*contact;grenade.y+=(ny-grenade.y)*contact
+            else:grenade.x,grenade.y=nx,ny
+            if contact<=1 or edge or grenade.fuse<=0:
+                grenade.x=clamp(grenade.x,self.left+7,self.right-7)
+                grenade.y=clamp(grenade.y,self.bottom+7,self.top-7)
+                self.explode(grenade)
+            else:kept.append(grenade)
+        self.grenades=kept
+        for b in self.blasts:b.life-=dt
+        self.blasts=[b for b in self.blasts if b.life>0]
+        for p in self.fragments:
+            p.life-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy-=460*dt
+        self.fragments=[p for p in self.fragments if p.life>0]
+
     def blocked(self, x1, y1, x2, y2):
         return any(segment_box(x1, y1, x2, y2, b) is not None for b in self.solids())
 
-    def chase(self, enemy, speed, dt):
+    def chase(self, enemy, speed, dt, target=None):
         """Use the same collision body as the player; never move through cover."""
         before=enemy.x,enemy.y
         if self.mode == 2:
-            target_x=self.player.x
+            target_x=(target or (self.player.x,self.player.y))[0]
             if self.actor_grounded(enemy):
                 feet=enemy.y-PLAYER_HALF
                 support=next((r for r in self.solids() if abs(r[3]-feet)<.5
@@ -578,9 +738,15 @@ class Game:
             if signature!=self._nav_signature:
                 self._nav_signature=signature
                 self._nav_revision+=1
-                self._navigator=Navigator(solids,(LEFT+16,BOTTOM+22,RIGHT-16,TOP-48),segment_box)
+                self._nav_cache.clear()
+            shape=(enemy.half_width,enemy.head_height)
+            if shape not in self._nav_cache:
+                self._nav_cache[shape]=Navigator(solids,
+                    (self.left+enemy.half_width+1,self.bottom+22,self.right-enemy.half_width-1,self.top-enemy.head_height),
+                    segment_box,enemy.half_width,enemy.head_height)
+            self._navigator=self._nav_cache[shape]
             enemy.nav_left-=dt
-            goal=self.player.x,self.player.y
+            goal=target or (self.player.x,self.player.y)
             if (enemy.nav_left<=0 or enemy.nav_revision!=self._nav_revision
                     or hypot(goal[0]-enemy.nav_goal[0],goal[1]-enemy.nav_goal[1])>60):
                 enemy.route=self._navigator.route((enemy.x,enemy.y),goal)
@@ -600,13 +766,29 @@ class Game:
         for e in self.enemies:
             if not e.alive:
                 continue
+            e.hurt_left=max(0,e.hurt_left-dt)
             dx, dy = unit(self.player.x-e.x, self.player.y-e.y)
             e.facing = direction_index(dx,dy,self.mode)
             distance=hypot(self.player.x-e.x,self.player.y-e.y)
+            if not e.alerted:
+                e.alerted=distance < (960 if e.kind in BOSS_KINDS else 820)
+                if not e.alerted:
+                    self.move_actor(e,0,0,dt,self.mode==2)
+                    continue
+            if e.kind in BOSS_KINDS:
+                self.update_boss(e,dt,distance)
+                if self.grace<=0 and self.overlap(self.player.box,e.box):self.die()
+                if self.state!='playing':return
+                continue
+            if e.kind=='grenadier':
+                self.update_grenadier(e,dt,distance)
+                if self.grace<=0 and self.overlap(self.player.box,e.box):self.die()
+                if self.state!='playing':return
+                continue
             sight=not self.blocked(e.x,e.y+24,self.player.x,self.player.y+24)
             pursuing=e.kind in ('hunter','knife') or not sight or distance>480
             if self.grace<=0 and pursuing:
-                speed=(KNIFE_SPEED+self.room_index*20 if e.kind=='knife'
+                speed=(min(560,KNIFE_SPEED+self.room_index*20) if e.kind=='knife'
                        else 76+self.room_index*8 if e.kind=='hunter' else 110+self.room_index*8)
                 self.chase(e,speed,dt)
             else:
@@ -622,20 +804,73 @@ class Game:
                         if not self.blocked(e.x, e.y+24, e.aim_x, e.aim_y):
                             ax, ay = self.aim_direction((e.aim_x,e.aim_y),e)
                             muzzle_x,muzzle_y=self.muzzle_position((e.aim_x,e.aim_y),e)
-                            speed = ENEMY_BULLET_SPEED+self.room_index*25
+                            speed = min(520,ENEMY_BULLET_SPEED+self.room_index*25)
                             self.bullets.append(Bullet(muzzle_x,muzzle_y,ax*speed,ay*speed,"enemy",6.0))
                             self.events.append("enemy_shot")
                         e.winding = False
-                        e.timer = 2.5-self.room_index*.12
+                        e.timer = max(1.65,2.5-self.room_index*.1)
             if (e.kind=='knife' and self.grace<=0
                     and hypot(self.player.x-e.x,self.player.y-e.y)<48
                     and not self.blocked(e.x,e.y+24,self.player.x,self.player.y+24)):
                 self.effects.append([e.x,e.y+20,.22,'slash'])
                 self.die()
                 return
-            if self.grace <= 0 and self.overlap(self.player.box, e.box):
+            if self.grace<=0 and self.overlap(self.player.box,e.box):
                 self.die()
                 return
+
+    def update_grenadier(self, e, dt, distance):
+        if self.grace>0:
+            self.move_actor(e,0,0,dt,self.mode==2)
+            return
+        if not e.winding and distance>650:
+            self.chase(e,115,dt)
+        elif not e.winding and distance<230 and self.mode!=2:
+            dx,dy=unit(e.x-self.player.x,e.y-self.player.y)
+            target=(clamp(e.x+dx*200,self.left+18,self.right-18),
+                    clamp(e.y+dy*200,self.bottom+22,self.top-48))
+            self.chase(e,105,dt,target)
+        else:self.move_actor(e,0,0,dt,self.mode==2)
+        e.timer-=dt
+        if e.timer<=1.1:
+            e.winding=True
+            if e.timer>.38:e.aim_x,e.aim_y=self.player.x,self.player.y+20
+        if e.timer<=0:
+            self.launch_grenade(e)
+            e.winding=False;e.timer=3.3
+
+    def update_boss(self, e, dt, distance):
+        """Every pattern has a readable, locked telegraph before it fires."""
+        phase=1+(e.hp<=e.max_hp*.5)+(e.kind=='finalboss' and e.hp<=e.max_hp*.25)
+        if phase!=e.phase:
+            e.phase=phase
+            self.message(f'{self.room.get("boss_name","보스")} {phase}단계 / 공격 패턴 강화',3)
+        if self.grace>0:
+            self.move_actor(e,0,0,dt,self.mode==2)
+            return
+        if not e.winding and distance>560:
+            self.chase(e,95+phase*12,dt)
+        else:self.move_actor(e,0,0,dt,self.mode==2)
+        e.timer-=dt
+        if e.timer<=1.15:
+            e.winding=True
+            if e.timer>.45:e.aim_x,e.aim_y=self.player.x,self.player.y+24
+        if e.timer>0:return
+        pattern=e.attack_cycle%(3 if e.kind=='finalboss' else 2)
+        if pattern==1:
+            count=3 if e.kind=='finalboss' else 2
+            for i in range(count):
+                self.launch_grenade(e,(clamp(e.aim_x+(i-(count-1)/2)*120,self.left+40,self.right-40),e.aim_y))
+        else:
+            angle=atan2(e.aim_y-e.y-24,e.aim_x-e.x)
+            count=(7+phase*2 if pattern==2 else 3 if e.kind=='midboss' else 5+phase)
+            spread=2*pi if pattern==2 else .7 if e.kind=='midboss' else 1.15
+            for i in range(count):
+                direction=angle+(i-(count-1)/2)*spread/max(1,count-1)
+                sx,sy=e.x+cos(direction)*(e.half_width+12),e.y+30+sin(direction)*28
+                self.bullets.append(Bullet(sx,sy,cos(direction)*(280+phase*30),sin(direction)*(280+phase*30),'enemy',7))
+            self.events.append('enemy_shot')
+        e.attack_cycle+=1;e.winding=False;e.timer=max(1.8,3.5-phase*.35)
 
     def update_bullets(self, dt):
         kept = []
@@ -656,11 +891,11 @@ class Game:
                     if self.grace <= 0:
                         self.die()
                 elif hit_actor is not None:
-                    self.kill(hit_actor)
+                    self.damage_enemy(hit_actor)
                 self.effects.append([b.x+(nx-b.x)*best_t, b.y+(ny-b.y)*best_t, .2, "spark"])
                 continue
             b.x, b.y, b.life = nx, ny, b.life-dt
-            if b.life > 0 and LEFT-10 < nx < RIGHT+10 and BOTTOM-10 < ny < TOP+10:
+            if b.life > 0 and self.left-10 < nx < self.right+10 and self.bottom-10 < ny < self.top+10:
                 kept.append(b)
         self.bullets = kept
 
@@ -675,7 +910,6 @@ class Game:
         self.elapsed += dt
         self.hint_left = max(0, self.hint_left-dt)
         self.shot_cooldown = max(0, self.shot_cooldown-dt)
-        self.effects = [[x, y, life-dt, kind] for x, y, life, kind in self.effects if life > dt]
         if self.mode == 4:
             self.time_left -= dt
             if self.time_left <= 0:
@@ -693,8 +927,9 @@ class Game:
         moving = hypot(self.player.x-before[0], self.player.y-before[1]) > .01
         self.time_frozen = self.mode == 4 and not moving
         world_dt = 0.0 if self.time_frozen else dt
+        self.effects = [[x,y,life-world_dt,kind] for x,y,life,kind in self.effects if life>world_dt]
         if self.held:
-            self.held.x, self.held.y = self.player.x, min(TOP-24, self.player.y+49)
+            self.held.x, self.held.y = self.player.x, min(self.top-24, self.player.y+49)
         if self.reload_left > 0:
             self.reload_left -= world_dt
             if self.reload_left <= 0:
@@ -713,6 +948,8 @@ class Game:
             self.update_bullets(world_dt)
             if self.state != "playing":
                 return
+            self.update_grenades(world_dt)
+            if self.state != 'playing':return
             if not self.history or self.world_time-self.history[-1][0] >= .045:
                 self.history.append((self.world_time, self.player.x, self.player.y))
             while len(self.history) > 1 and self.history[0][0] < self.world_time-4.1:
@@ -731,5 +968,5 @@ class Game:
             self.clear = True
             self.message("방 클리어! Enter 또는 오른쪽 출구로 다음 방", 30)
             self.events.append("clear")
-        if self.clear and self.player.x >= RIGHT-29:
+        if self.clear and self.player.x >= self.right-29:
             self.next_room()

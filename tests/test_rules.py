@@ -98,9 +98,10 @@ class Rules(unittest.TestCase):
         game.crates=[Crate(650,300)];game.bullets=[Bullet(600,300,2000,0,'player')]
         game.tick(.05);self.assertTrue(game.enemies[0].alive);self.assertEqual(len(game.bullets),0)
 
-    def test_all_five_rooms_reachable_and_streak_resets(self):
+    def test_all_twelve_chapters_reachable_and_streak_resets(self):
         game=sandbox();game.streak=3
-        for i in range(5):
+        self.assertEqual(len(game.levels),12)
+        for i in range(len(game.levels)):
             game.clear=True;self.assertTrue(game.next_room());self.assertEqual(game.streak,0)
         self.assertEqual(game.state,'won')
 

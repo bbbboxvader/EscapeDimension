@@ -2,6 +2,9 @@
 from __future__ import annotations
 import argparse
 import ctypes
+from collections import deque
+from copy import copy
+from dataclasses import replace
 import math
 import os
 from pathlib import Path
@@ -26,11 +29,13 @@ from sdl2 import (SDL_SetWindowTitle, SDL_SetRenderDrawColor, SDL_RenderClear,
                   SDL_SetTextureAlphaMod, SDL_RenderReadPixels, SDL_PIXELFORMAT_ARGB8888,
                   SDL_RenderGeometry, SDL_Vertex,
                   SDL_GetMouseState, SDL_WINDOWEVENT, SDL_GetWindowFlags,
-                  SDL_WINDOW_INPUT_FOCUS)
+                  SDL_WINDOW_INPUT_FOCUS, SDL_RenderSetClipRect, SDL_Rect)
 
 from core import (Game, WIDTH, HEIGHT, LEFT, RIGHT, BOTTOM, TOP, clamp,
-                  MAGAZINE_SIZE, MAX_AMMO, RELOAD_DURATION, DEATH_DURATION)
+                  MAGAZINE_SIZE, MAX_AMMO, RELOAD_DURATION, DEATH_DURATION,
+                  BOSS_KINDS, Grenade)
 from visuals import direction_index, atlas_region, motion_frame, torso_angle, deform_upper_point
+from camera import Camera
 
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS = ROOT / "assets"
@@ -46,6 +51,8 @@ class App:
     def __init__(self, args):
         self.args = args
         self.game = Game(ROOT/"levels.json")
+        self.camera = Camera()
+        self.selected_chapter = (getattr(args,'chapter',None) or 1)-1
         self.keys = set()
         self.mouse = (820, 320)
         self.mouse_down = False
@@ -63,6 +70,7 @@ class App:
         self.atlas = p.load_image(str(ASSETS/"sprites.png"))
         self.cw, self.ch = self.atlas.w//3, self.atlas.h//2
         self.characters = p.load_image(str(ASSETS/"characters_8dir.png"))
+        self.special_enemies = p.load_image(str(ASSETS/'special_enemies.png'))
         self.motion_atlases = {'idle':self.characters}
         for name in ('walk_player','walk_enemy','reload_player','death_both','knife_enemy'):
             self.motion_atlases[name] = p.load_image(str(ASSETS/(name+'.png')))
@@ -74,7 +82,7 @@ class App:
         self.fonts = {size:p.load_font(str(self.fontpath),size) for size in (14,16,18,20,23,26,32,42,66)}
         self.sounds = {}
         if api.audio_on:
-            for name in ("shot","switch","hit","death","reload","pickup","clear","rewind","enemy_shot","win","throw"):
+            for name in ("shot","switch","hit","death","reload","pickup","clear","rewind","enemy_shot","win","throw","grenade","explosion"):
                 f = ASSETS/(name+".wav")
                 if f.exists():
                     self.sounds[name] = p.load_wav(str(f))
@@ -83,7 +91,7 @@ class App:
         self.grain = [(rng.randrange(65,1210),rng.randrange(143,679),rng.choice((230,235,240))) for _ in range(300)]
         if args.smoke and args.smoke_scene not in ('title','directions','motions'):
             self.game.start()
-            self.game.room_index = args.smoke_room-1
+            self.game.room_index = self.selected_chapter if getattr(args,'chapter',None) else args.smoke_room-1
             self.game.load_room()
             if args.smoke_scene in ('3d','4d'):
                 self.game.set_mode(3)
@@ -94,6 +102,18 @@ class App:
             if args.smoke_scene == '4d':
                 self.game.set_mode(4)
                 self.game.tick(.001)
+        if getattr(args,'chapter',None) and not args.smoke:self.start_game()
+
+    def start_game(self):
+        self.game.start()
+        if self.selected_chapter:
+            self.game.room_index=self.selected_chapter
+            self.game.load_room()
+        self.camera.follow(self.game.player,self.game.bounds)
+
+    @property
+    def world_mouse(self):
+        return self.camera.to_world(*self.mouse)
 
     def text(self, value, x, y, size=18, color=INK):
         self.fonts[size].draw(x, y, str(value), color)
@@ -173,6 +193,9 @@ class App:
         facing = direction_index(dx,dy,self.game.mode) if player and actor.alive else actor.facing
         if player:
             self.player_facing = facing
+        if actor.kind in ('grenadier',*BOSS_KINDS):
+            self.special_actor(actor,alpha)
+            return
         reload_progress = 1-self.game.reload_left/RELOAD_DURATION if player and self.game.reload_left>0 else None
         atlas,frame = motion_frame(facing,actor.walk_distance,actor.moving,
                                   reload_progress,actor.death_elapsed if not actor.alive else None,
@@ -207,6 +230,24 @@ class App:
         elif not player and actor.alive and actor.kind == 'hunter':
             self.text('!',actor.x-3,actor.y+70,14,(177,98,38))
 
+    def special_actor(self,actor,alpha):
+        group={'grenadier':0,'midboss':1,'finalboss':2}[actor.kind]
+        size=(92,136,164)[group]
+        row=group*2+actor.facing//4;col=actor.facing%4
+        w,h=self.special_enemies.w//4,self.special_enemies.h//6
+        progress=clamp(actor.death_elapsed/DEATH_DURATION,0,1) if not actor.alive else 0
+        bob=abs(math.sin(actor.walk_distance*.12))*2 if actor.moving else 0
+        if actor.hurt_left>0 and int(self.ui_time*24)%2:alpha=min(alpha,110)
+        SDL_SetTextureAlphaMod(self.special_enemies.texture,int(alpha))
+        self.special_enemies.clip_composite_draw(col*w,(5-row)*h,w,h,progress*math.pi/2,'',
+              actor.x,actor.y-22+.44*size-progress*24+bob,size,size)
+        SDL_SetTextureAlphaMod(self.special_enemies.texture,255)
+        if actor.alive:
+            label=('유탄병','중간보스','최종보스')[group]
+            self.text(label,actor.x-23,actor.y+size*.78,14,(155,103,30) if group<2 else PURPLE)
+            if group and actor.phase>1:
+                p.draw_circle(actor.x,actor.y+20,45+group*7,*PURPLE,100,False)
+
     def events(self):
         for event in p.get_events():
             if event.type == p.SDL_QUIT:
@@ -228,8 +269,10 @@ class App:
                     self.muted=not self.muted
                 elif key==p.SDLK_F1:
                     self.help=not self.help
+                elif self.game.state=='title' and key in (p.SDLK_LEFT,p.SDLK_RIGHT):
+                    self.selected_chapter=(self.selected_chapter+(1 if key==p.SDLK_RIGHT else -1))%len(self.game.levels)
                 elif key==p.SDLK_RETURN:
-                    if self.game.state=="title": self.game.start()
+                    if self.game.state=="title": self.start_game()
                     elif self.game.state in ("dead","over","won"):
                         if self.game.death_finished:self.game.retry()
                     elif not self.paused and not self.help:
@@ -240,7 +283,7 @@ class App:
                     elif key==p.SDLK_r: self.game.reload()
                     elif key==p.SDLK_SPACE and not was_down: self.game.jump()
                     elif key==p.SDLK_e: self.game.pickup()
-                    elif key==p.SDLK_q: self.game.throw(self.mouse)
+                    elif key==p.SDLK_q: self.game.throw(self.world_mouse)
                     elif key==p.SDLK_LEFT: self.game.select_rewind(-1)
                     elif key==p.SDLK_RIGHT: self.game.select_rewind(1)
             elif event.type == p.SDL_MOUSEMOTION:
@@ -252,7 +295,7 @@ class App:
             elif event.type == p.SDL_MOUSEBUTTONDOWN and event.button==1:
                 self.mouse=(event.x,HEIGHT-event.y)
                 if self.game.state=="title":
-                    if 505<self.mouse[0]<775 and 185<self.mouse[1]<243:self.game.start()
+                    if 505<self.mouse[0]<775 and 185<self.mouse[1]<243:self.start_game()
                 elif self.game.mode==4 and self.mouse[1]<135:
                     points=self.game.rewind_points()
                     if points:
@@ -260,7 +303,8 @@ class App:
                         self.game.select_rewind(index=index)
                 else:
                     points=self.game.rewind_points() if self.game.mode==4 else []
-                    near=[(math.hypot(x-self.mouse[0],y-self.mouse[1]),i) for i,(_,x,y,_) in enumerate(points)]
+                    wx,wy=self.world_mouse
+                    near=[(math.hypot(x-wx,y-wy),i) for i,(_,x,y,_) in enumerate(points)]
                     if near and min(near)[0]<25:self.game.select_rewind(index=min(near)[1])
                     else:self.mouse_down=True
         # Focus loss should never leave movement or firing latched.
@@ -305,12 +349,12 @@ class App:
             self.text(label,x,y,14,(162,166,157))
         self.text(g.room.get('tag','FIELD NOTE'),92,573,14,accent)
         self.line(92,554,300,554,accent,80)
-        self.text('IN',LEFT+19,BOTTOM+101,14,CYAN)
-        self.arrow(LEFT+25,BOTTOM+74,1,0,CYAN,22,110)
-        self.rect(RIGHT-25,BOTTOM+1,RIGHT-1,BOTTOM+90,(214,215,204),True,110)
-        self.rect(RIGHT-25,BOTTOM+1,RIGHT-1,BOTTOM+90,(156,162,151))
-        self.line(RIGHT-22,BOTTOM+85,RIGHT-4,BOTTOM+85,accent,150)
-        self.text('EXIT',RIGHT-39,BOTTOM+107,14,accent)
+        self.text('IN',g.left+19,g.bottom+101,14,CYAN)
+        self.arrow(g.left+25,g.bottom+74,1,0,CYAN,22,110)
+        self.rect(g.right-25,g.bottom+1,g.right-1,g.bottom+90,(214,215,204),True,110)
+        self.rect(g.right-25,g.bottom+1,g.right-1,g.bottom+90,(156,162,151))
+        self.line(g.right-22,g.bottom+85,g.right-4,g.bottom+85,accent,150)
+        self.text('EXIT',g.right-39,g.bottom+107,14,accent)
         if g.mode==2:
             self.arrow(LEFT+35,455,0,-1,accent,30,130)
             self.text('G',LEFT+30,476,14,accent)
@@ -322,7 +366,7 @@ class App:
         label={2:"좌우 이동 + 중력",3:"8방향 자유 이동",4:"정지 + 과거 위치"}[g.mode]
         self.text(label,636,751,20,mode_colors[g.mode])
         self.text(f"AGE {g.age:02d} / 40",970,754,26,RED if g.age>=35 else INK)
-        self.text(f"ROOM {g.room_index+1:02d} / {len(g.levels):02d}",970,715,18,MUTED)
+        self.text(f"CHAPTER {g.room_index+1:02d} / {len(g.levels):02d}",970,715,18,MUTED)
         self.text(f"{g.magazine:02d}",79,97,42,CYAN if g.magazine else RED)
         self.text(f"/ {g.reserve:02d}",143,98,23,MUTED)
         self.text(f"합계 {g.total_ammo:02d} / {MAX_AMMO}",80,44,14,MUTED)
@@ -333,7 +377,7 @@ class App:
             self.text("WORLD PAUSED" if g.time_frozen else "WORLD MOVING",880,610,14,PURPLE)
             self.rect(880,596,1158,600,(224,216,237),True)
             self.rect(880,596,880+278*max(0,g.time_left)/10,600,PURPLE,True)
-        self.text("2 평면   3 자유 이동   4 시간   E 집기   Q 던지기   F1 도움말   ESC 일시정지",286,35,16,MUTED)
+        self.text("2 평면  3 자유 이동  4 시간  E 집기  Q 던지기  F1 도움말  ESC 정지",286,30,14,MUTED)
         if g.mode==2:
             self.text("A / D 좌우 이동   ·   SPACE 점프",293,101,20,CYAN)
             self.text("같은 종이가 지금은 높이로 읽힙니다",293,72,16,MUTED)
@@ -341,12 +385,38 @@ class App:
             self.text("W / A / S / D 자유 이동",293,101,20,(152,115,27))
             self.text("원근 없는 같은 종이가 바닥이 됩니다",293,72,16,MUTED)
         else:self.timeline()
-        if g.hint_left>0:
+        boss=next((e for e in g.enemies if e.alive and e.kind in BOSS_KINDS),None)
+        if boss:
+            self.text(f"{g.room.get('boss_name','보스')}  /  {boss.phase}단계",450,686,18,PURPLE)
+            self.rect(450,675,890,680,(221,212,230),True)
+            self.rect(450,675,450+440*boss.hp/boss.max_hp,680,PURPLE,True)
+            self.text(f'{boss.hp} / {boss.max_hp}',900,682,16,PURPLE)
+        if g.hint_left>0 and not boss:
             self.text(g.hint,95,609,16,PURPLE if g.mode==4 else CYAN)
         if g.reload_left>0 and g.player.alive:
             progress=1-g.reload_left/RELOAD_DURATION
-            self.rect(g.player.x-25,g.player.y-39,g.player.x+25,g.player.y-35,(219,221,216),True)
-            self.rect(g.player.x-25,g.player.y-39,g.player.x-25+50*progress,g.player.y-35,CYAN,True)
+            x,y=self.camera.to_screen(g.player.x,g.player.y)
+            self.rect(x-25,y-39,x+25,y-35,(219,221,216),True)
+            self.rect(x-25,y-39,x-25+50*progress,y-35,CYAN,True)
+        if g.mode!=4:self.minimap()
+
+    def minimap(self):
+        g=self.game
+        left,bottom,width,height=1014,44,190,77
+        sx=width/(g.right-g.left);sy=height/(g.top-g.bottom)
+        def point(x,y):return left+(x-g.left)*sx,bottom+(y-g.bottom)*sy
+        self.rect(left,bottom,left+width,bottom+height,(225,224,214),True)
+        for r in g.obstacles:
+            a,b=point(r[0],r[1]);c,d=point(r[2],r[3])
+            self.rect(a,b,max(a+1,c),max(b+1,d),(145,132,107),True)
+        for e in g.enemies:
+            if e.alive:
+                x,y=point(e.x,e.y);p.draw_circle(x,y,3 if e.kind in BOSS_KINDS else 2,*RED,235,True)
+        x,y=point(g.player.x,g.player.y);p.draw_circle(x,y,3,*CYAN,255,True)
+        a,b=point(LEFT+self.camera.x,BOTTOM+self.camera.y)
+        c,d=point(RIGHT+self.camera.x,TOP+self.camera.y)
+        self.rect(a,b,c,d,CYAN,False,180)
+        self.text('MAP / 갈색 벽: 폭발로 파괴',1014,130,14,MUTED)
 
     def timeline(self):
         g=self.game;points=g.rewind_points()
@@ -364,6 +434,37 @@ class App:
         self.text(f"{ago:g}초 전 / {g.precision:g}초 간격  ·  휠·방향키 선택 / Enter 이동",334,65,16,PURPLE if safe else RED)
 
     def world(self):
+        """Project a read-only scene copy; physics and input remain in world space."""
+        real=self.game
+        self.camera.follow(real.player,real.bounds)
+        dx,dy=self.camera.x,self.camera.y
+        g=copy(real)
+        g.bounds=(real.left-dx,real.bottom-dy,real.right-dx,real.top-dy)
+        g.player=replace(real.player,x=real.player.x-dx,y=real.player.y-dy)
+        g.enemies=[replace(e,x=e.x-dx,y=e.y-dy,aim_x=e.aim_x-dx,aim_y=e.aim_y-dy) for e in real.enemies]
+        g.crates=[replace(c,x=c.x-dx,y=c.y-dy) for c in real.crates]
+        g.obstacles=[(a-dx,b-dy,c-dx,d-dy) for a,b,c,d in real.obstacles]
+        g.reinforced={(a-dx,b-dy,c-dx,d-dy) for a,b,c,d in real.reinforced}
+        g.bullets=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.bullets]
+        g.grenades=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.grenades]
+        g.blasts=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.blasts]
+        g.fragments=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.fragments]
+        g.ammo_pickups=[(x-dx,y-dy) for x,y in real.ammo_pickups]
+        g.effects=[[x-dx,y-dy,life,kind] for x,y,life,kind in real.effects]
+        g.history=deque((t,x-dx,y-dy) for t,x,y in real.history)
+        room=dict(real.room)
+        room['zones']=[[a-dx,b-dy,c-dx,d-dy,s] for a,b,c,d,s in room.get('zones',[])]
+        room['marks']=[[x-dx,y-dy,s] for x,y,s in room.get('marks',[])]
+        g.levels=list(real.levels);g.levels[g.room_index]=room
+        self.game=g
+        clip=SDL_Rect(int(LEFT),int(HEIGHT-TOP),int(RIGHT-LEFT),int(TOP-BOTTOM))
+        SDL_RenderSetClipRect(api.renderer,ctypes.byref(clip))
+        try:self.draw_world()
+        finally:
+            SDL_RenderSetClipRect(api.renderer,None)
+            self.game=real
+
+    def draw_world(self):
         g=self.game
         self.map_details()
         if g.mode==4:
@@ -378,6 +479,10 @@ class App:
             for x in range(int(x1)+5,int(x2)-8,13):
                 self.line(x,y1+3,x+7,y2-3,(191,192,177),130)
             self.rect(*rect,(136,145,135))
+            if rect not in g.reinforced:
+                cx,cy=(x1+x2)/2,(y1+y2)/2
+                self.line(cx-8,cy+8,cx+2,cy,(166,117,76),170)
+                self.line(cx+2,cy,cx-3,cy-10,(166,117,76),170)
             self.line(x1+2,y2-2,x2-2,y2-2,(255,254,242))
             for x in (x1+6,x2-6):
                 p.draw_circle(x,(y1+y2)/2,2,136,145,135,200,True)
@@ -393,6 +498,18 @@ class App:
             if e.alive and e.winding and not g.clear:
                 self.line(e.x,e.y+24,e.aim_x,e.aim_y,RED,145 if g.time_frozen else 220)
                 p.draw_circle(e.aim_x,e.aim_y,10,*RED,145,False)
+                grenade_attack=(e.kind=='grenadier' or (e.kind in BOSS_KINDS and e.attack_cycle%(3 if e.kind=='finalboss' else 2)==1))
+                if grenade_attack:
+                    p.draw_circle(e.aim_x,e.aim_y,100,*RED,85,False)
+                elif e.kind in BOSS_KINDS:
+                    if e.kind=='finalboss' and e.attack_cycle%3==2:
+                        p.draw_circle(e.x,e.y+24,140,*PURPLE,90,False)
+                        for k in range(8):self.arrow(e.x,e.y+24,math.cos(k*math.pi/4),math.sin(k*math.pi/4),PURPLE,110,65)
+                    else:
+                        angle=math.atan2(e.aim_y-e.y-24,e.aim_x-e.x)
+                        length=math.hypot(e.aim_x-e.x,e.aim_y-e.y-24)
+                        for delta in (-.35,.35) if e.kind=='midboss' else (-.575,.575):
+                            self.line(e.x,e.y+24,e.x+math.cos(angle+delta)*length,e.y+24+math.sin(angle+delta)*length,RED,65)
             target=(e.aim_x,e.aim_y) if e.winding else (g.player.x,g.player.y+24)
             self.actor(e,target)
         self.actor(g.player,self.mouse,player=True)
@@ -408,6 +525,26 @@ class App:
             p.draw_circle(b.x,b.y,4,*color,255,True)
             norm=math.hypot(b.vx,b.vy) or 1
             self.line(b.x-b.vx/norm*12,b.y-b.vy/norm*12,b.x,b.y,color)
+        for grenade in g.grenades:
+            lift=(max(0,math.sin(math.pi*min(1,grenade.age/grenade.flight_time)))*65 if g.mode!=2 else 0)
+            landing=max(0,grenade.flight_time-grenade.age)
+            tx,ty=grenade.x+grenade.vx*landing,grenade.y+grenade.vy*landing
+            if g.mode==2:ty-=.5*880*.75*landing*landing
+            p.draw_circle(tx,ty,round(grenade.radius*.7),*RED,95,False)
+            self.line(tx-8,ty,tx+8,ty,RED,150)
+            self.line(tx,ty-8,tx,ty+8,RED,150)
+            self.line(grenade.x,grenade.y,grenade.x,grenade.y+lift,(151,111,39),90)
+            p.draw_circle(grenade.x,grenade.y+lift,8,43,48,40,255,True)
+            p.draw_circle(grenade.x,grenade.y+lift,5,230,154,45,255,True)
+            self.text(f'{max(0,grenade.fuse):.1f}',grenade.x+10,grenade.y+lift+8,14,RED)
+        for blast in g.blasts:
+            progress=1-blast.life/.55
+            radius=round(blast.radius*(.35+.65*progress))
+            p.draw_circle(blast.x,blast.y,radius,240,138,45,int(150*(1-progress)),True)
+            p.draw_circle(blast.x,blast.y,radius,216,78,47,int(240*(1-progress)),False)
+            p.draw_circle(blast.x,blast.y,max(1,round(radius*.55)),255,220,144,int(180*(1-progress)),True)
+        for fragment in g.fragments:
+            self.rect(fragment.x-3,fragment.y-3,fragment.x+3,fragment.y+3,(139,119,88),True,int(255*fragment.life/.8))
         for x,y,life,kind in g.effects:
             color=RED if kind=="hit" else (211,166,38)
             if kind=='slash':color=(220,114,33)
@@ -416,11 +553,11 @@ class App:
             p.draw_circle(x,y,max(2,radius),*color,int(clamp(life*700,0,255)),False)
         # Exit is only emphasized after combat, keeping the page nearly blank.
         if g.clear:
-            self.rect(RIGHT-31,BOTTOM+7,RIGHT-7,BOTTOM+82,CYAN)
-            self.text("NEXT",RIGHT-57,BOTTOM+97,16,CYAN)
-            self.text("ROOM CLEAR  /  Enter 다음 방",420,574,26,CYAN)
+            self.rect(g.right-31,g.bottom+7,g.right-7,g.bottom+82,CYAN)
+            self.text("NEXT",g.right-57,g.bottom+97,16,CYAN)
+            self.text("CHAPTER CLEAR  /  Enter 다음 챕터",370,574,26,CYAN)
         else:
-            self.line(RIGHT-5,BOTTOM+6,RIGHT-5,BOTTOM+70,(186,184,174))
+            self.line(g.right-5,g.bottom+6,g.right-5,g.bottom+70,(186,184,174))
         mx,my=self.mouse
         self.line(mx-8,my,mx-3,my,CYAN);self.line(mx+3,my,mx+8,my,CYAN)
         self.line(mx,my-8,mx,my-3,CYAN);self.line(mx,my+3,mx,my+8,CYAN)
@@ -441,6 +578,7 @@ class App:
         self.text("Escape",105,555,66)
         self.text("Dimension",105,474,66)
         self.text("같은 종이. 다른 공간의 규칙.",111,397,26,MUTED)
+        self.text('12 CHAPTERS / 중간보스 06 / 최종보스 12',111,365,18,PURPLE)
         self.text("2D  좌우와 낙하",114,322,23,CYAN)
         self.text("3D  8방향 자유 이동",114,281,23,(152,115,27))
         self.text("4D  정지와 과거 위치",114,240,23,PURPLE)
@@ -449,6 +587,7 @@ class App:
         self.character_frame(12,1080,286,188)
         self.rect(505,185,775,243,CYAN,True)
         self.text("Enter  게임 시작",544,215,23,(255,255,255))
+        self.text(f'← →  시작 챕터 {self.selected_chapter+1:02d} : {self.game.levels[self.selected_chapter]["name"]}',367,161,18,PURPLE)
         self.text("Python + pico2d   ·   F1 조작 안내   ·   ESC 종료",407,126,16,MUTED)
 
     def draw(self):
@@ -484,12 +623,12 @@ class App:
                     f"다음 연속 사망의 기본 비용: +{2**g.streak}세","4D 종료 비용은 사망 비용과 별도로 적용됩니다."],"Enter  이 방 다시 도전")
             elif g.state=="over" and g.death_finished:
                 self.panel("수명을 모두 사용했습니다",f"AGE {g.age}  /  40세 도달",[
-                    f"도달한 방: {g.room_index+1} / {len(g.levels)}",f"전체 사망 {g.total_deaths}회   /   처치 {g.kills}회",
+                    f"도달한 챕터: {g.room_index+1} / {len(g.levels)}",f"전체 사망 {g.total_deaths}회   /   처치 {g.kills}회",
                     "지나친 시간 조작은 다음 시도를 어렵게 만듭니다.","다시 20세가 되어 첫 방부터 시작합니다."],"Enter  처음부터 다시 시작")
             elif g.state=="won":
                 self.panel("ESCAPE COMPLETE",f"모든 방 섬멸 / 생존 나이 {g.age}세",[
                     f"방 {len(g.levels)}개 클리어   /   플레이 {int(g.elapsed//60)}분 {int(g.elapsed%60)}초",
-                    f"발사 {g.shots}발   /   전체 사망 {g.total_deaths}회","이동 방향과 중력을 바꾸어 모든 페이지를 통과했습니다.",
+                    f"발사 {g.shots}발   /   전체 사망 {g.total_deaths}회","최종보스를 쓰러뜨리고 12개 챕터를 통과했습니다.",
                     "20세에 가까운 나이로 클리어해 보세요."],"Enter  새로운 플레이")
         if self.paused:self.panel("PAUSED","시간도 함께 멈춰 있습니다",["ESC를 누르면 이어서 플레이합니다.","F1을 누르면 조작과 규칙을 확인할 수 있습니다."],"ESC  계속하기")
         if self.help:
@@ -499,7 +638,7 @@ class App:
                 "2/3/4: 모드 전환   ·   E 상자 집기 / Q 던지기",
                 "4D: 휠·방향키로 과거 선택, Enter로 위치 이동",
                 "4D 종료 +1세 / 연속 사망 +1, +2, +4… / 40세 종료",
-                "빈 종이는 2D에서 높이, 3D에서 바닥입니다."],"F1 또는 ESC  닫기")
+                "유탄은 갈색 벽·상자를 파괴 / 보스는 6·12챕터"],"F1 또는 ESC  닫기")
 
     def screenshot(self, filename):
         """Capture our SDL framebuffer. No OS/UI automation is used here."""
@@ -526,7 +665,7 @@ class App:
             if not self.paused and not self.help and not self.args.smoke:
                 mx=int(p.SDLK_d in self.keys)-int(p.SDLK_a in self.keys)
                 my=int(p.SDLK_w in self.keys)-int(p.SDLK_s in self.keys)
-                self.game.tick(dt,(mx,my),self.mouse,self.mouse_down)
+                self.game.tick(dt,(mx,my),self.world_mouse,self.mouse_down)
             for event in self.game.events:
                 sound=self.sounds.get(event)
                 if sound and not self.muted:sound.play()
@@ -538,7 +677,7 @@ class App:
             p.update_canvas();frames+=1
             time.sleep(.002)
         self.motion_atlases.clear()
-        del self.atlas,self.characters
+        del self.atlas,self.characters,self.special_enemies
         p.close_canvas()
 
     def integration_test(self):
@@ -656,7 +795,7 @@ class App:
         report={'status':'pass','checks':checks,'count':len(checks)}
         if self.args.test_report:Path(self.args.test_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         self.motion_atlases.clear()
-        del self.atlas,self.characters;p.close_canvas()
+        del self.atlas,self.characters,self.special_enemies;p.close_canvas()
 
     def verify_waist_connections(self, check):
         """Read our own framebuffer and check head-to-feet silhouette continuity."""
@@ -700,7 +839,8 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--smoke',action='store_true',help='Render a deterministic 4D frame and exit')
     parser.add_argument('--smoke-scene',choices=['title','2d','3d','4d','directions','motions'],default='4d')
-    parser.add_argument('--smoke-room',type=int,choices=range(1,6),default=1)
+    parser.add_argument('--smoke-room',type=int,choices=range(1,13),default=1)
+    parser.add_argument('--chapter',type=int,choices=range(1,13),help='Start directly in a selected chapter')
     parser.add_argument('--capture',help='Save smoke-test framebuffer to PNG')
     parser.add_argument('--self-test',action='store_true',help='Run real SDL input integration tests')
     parser.add_argument('--test-report',help='Write input test report JSON')
