@@ -160,7 +160,8 @@ class BossTests(unittest.TestCase):
 
     def test_same_falling_crate_cannot_damage_boss_every_frame(self):
         g=arena();boss=Actor(800,176,'midboss');g.enemies=[boss]
-        g.crates=[Crate(800,230,0,-250)]
+        g.set_mode(2)
+        g.crates=[Crate(800,230,0,-250,fall_distance=85)]
         for _ in range(8):g.update_crates(.005)
         self.assertEqual(boss.hp,12)
 

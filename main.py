@@ -36,6 +36,7 @@ from core import (Game, WIDTH, HEIGHT, LEFT, RIGHT, BOTTOM, TOP, clamp,
                   BOSS_KINDS, Grenade)
 from visuals import direction_index, atlas_region, motion_frame, torso_angle, deform_upper_point
 from camera import Camera
+from space import turn_point
 
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS = ROOT / "assets"
@@ -52,6 +53,7 @@ class App:
         self.args = args
         self.game = Game(ROOT/"levels.json")
         self.camera = Camera()
+        self.scene_scale=1.
         self.selected_chapter = (getattr(args,'chapter',None) or 1)-1
         self.keys = set()
         self.mouse = (820, 320)
@@ -112,10 +114,11 @@ class App:
         if self.selected_chapter:
             self.game.room_index=self.selected_chapter
             self.game.load_room()
-        self.camera.follow(self.game.player,self.game.bounds,self.game.room.get('arena') if self.game.command_window else None)
+        self.camera.follow(self.game.player,self.game.bounds,self.game.room.get('arena') if self.game.command_window else None,self.game.view_turn)
 
     @property
     def world_mouse(self):
+        self.camera.follow(self.game.player,self.game.bounds,self.game.room.get('arena') if self.game.command_window else None,self.game.view_turn)
         return self.camera.to_world(*self.mouse)
 
     def text(self, value, x, y, size=18, color=INK):
@@ -130,12 +133,14 @@ class App:
         p.draw_line(x1,y1,x2,y2,*color,alpha)
 
     def sprite(self, cell, x,y,size=96,flip=False,alpha=255):
+        size*=self.scene_scale
         col,row=cell%3,cell//3
         SDL_SetTextureAlphaMod(self.atlas.texture, int(clamp(alpha,0,255)))
         self.atlas.clip_composite_draw(col*self.cw, (1-row)*self.ch, self.cw,self.ch,0,"h" if flip else "",x,y,size,size)
         SDL_SetTextureAlphaMod(self.atlas.texture,255)
 
     def character_frame(self, frame, x, y, size=84, alpha=255, atlas='idle', angle=0):
+        size*=self.scene_scale
         image = self.motion_atlases[atlas]
         region = atlas_region(frame, image.w, image.h)
         SDL_SetTextureAlphaMod(image.texture, int(clamp(alpha,0,255)))
@@ -169,6 +174,7 @@ class App:
 
     def character_layers(self, upper, lower, x, y, size=84, alpha=255, angle=0):
         """Keep the belt attached while independently animating torso and legs."""
+        size*=self.scene_scale
         bottom=y-size/2
         for part,(name,frame) in (('legs',lower),('torso',upper)):
             image=self.motion_atlases[name]
@@ -192,7 +198,8 @@ class App:
             SDL_SetTextureAlphaMod(image.texture,255)
 
     def actor(self, actor, target, player=False, alpha=255):
-        dx,dy = target[0]-actor.x, target[1]-(actor.y+24)
+        scale=self.scene_scale
+        dx,dy = target[0]-actor.x, target[1]-(actor.y+24*scale)
         facing = direction_index(dx,dy,self.game.mode) if player and actor.alive else actor.facing
         if player:
             self.player_facing = facing
@@ -220,16 +227,16 @@ class App:
             knife_frame=facing+(int(actor.walk_distance/32)%2)*8
             progress=clamp(actor.death_elapsed/DEATH_DURATION,0,1) if not actor.alive else 0
             angle=progress*math.pi/2*(-1 if facing in (3,4,5) else 1)
-            self.character_frame(knife_frame,actor.x,actor.y+18-10*progress,84,alpha,'knife_enemy',angle)
+            self.character_frame(knife_frame,actor.x,actor.y+(18-10*progress)*scale,84,alpha,'knife_enemy',angle)
             self.last_enemy_art='knife_enemy',knife_frame
         elif actor.alive and (self.game.mode==2 or reload_progress is not None):
             lower=motion_frame(facing,actor.walk_distance,actor.moving,enemy=not player)
             angle=torso_angle(dx,dy) if self.game.mode==2 and reload_progress is None else 0
-            self.character_layers((atlas,frame),lower,actor.x,actor.y+18+bob,84,alpha,angle)
+            self.character_layers((atlas,frame),lower,actor.x,actor.y+(18+bob)*scale,84,alpha,angle)
             if player:
                 self.player_layers={'upper':(atlas,frame),'lower':lower,'angle':angle}
         else:
-            self.character_frame(frame,actor.x,actor.y+18+bob,84,alpha,atlas)
+            self.character_frame(frame,actor.x,actor.y+(18+bob)*scale,84,alpha,atlas)
             if player:self.player_layers=None
         if not player and actor.alive and actor.kind=='knife':
             self.text('KNIFE',actor.x-20,actor.y+70,14,(200,105,37))
@@ -238,7 +245,7 @@ class App:
 
     def special_actor(self,actor,alpha):
         group={'grenadier':0,'midboss':1,'finalboss':2}[actor.kind]
-        size=(92,136,164)[group]
+        size=(92,136,164)[group]*self.scene_scale
         row=group*2+actor.facing//4;col=actor.facing%4
         w,h=self.special_enemies.w//4,self.special_enemies.h//6
         progress=clamp(actor.death_elapsed/DEATH_DURATION,0,1) if not actor.alive else 0
@@ -258,7 +265,7 @@ class App:
         firing=actor.burst_left>0 and int(self.ui_time*24)%2==0
         frame=actor.facing+(8 if firing else 0)
         if actor.hurt_left>0 and int(self.ui_time*24)%2:alpha=min(alpha,110)
-        y=actor.y+33
+        y=actor.y+33*self.scene_scale
         if actor.moving:y+=abs(math.sin(actor.walk_distance*.12))*2
         if actor.alive and self.game.mode==2:
             angle=torso_angle(target[0]-actor.x,target[1]-actor.y-28)
@@ -305,6 +312,8 @@ class App:
                     elif key==p.SDLK_SPACE and not was_down: self.game.jump()
                     elif key==p.SDLK_e: self.game.pickup()
                     elif key==p.SDLK_q: self.game.throw(self.world_mouse)
+                    elif key==p.SDLK_f and not was_down:self.game.throw_knife(self.world_mouse)
+                    elif key in (p.SDLK_z,p.SDLK_x) and not was_down:self.game.rotate_view(-1 if key==p.SDLK_z else 1)
                     elif key==p.SDLK_LEFT: self.game.select_rewind(-1)
                     elif key==p.SDLK_RIGHT: self.game.select_rewind(1)
             elif event.type == p.SDL_MOUSEMOTION:
@@ -365,11 +374,12 @@ class App:
             for x,y,sx,sy in ((x1,y1,1,1),(x2,y1,-1,1),(x1,y2,1,-1),(x2,y2,-1,-1)):
                 self.line(x,y,x+sx*15,y,accent,80)
                 self.line(x,y,x,y+sy*15,accent,80)
-            self.text(label,x1+12,y2-20,14,(157,165,161))
+            if not g.command_window:self.text(label,x1+12,y2-20,14,(157,165,161))
         for x,y,label in g.room.get('marks',[]):
             self.text(label,x,y,14,(162,166,157))
         self.text(g.room.get('tag','FIELD NOTE'),92,573,14,accent)
         self.line(92,554,300,554,accent,80)
+        if g.command_window:return
         self.text('IN',g.left+19,g.bottom+101,14,CYAN)
         self.arrow(g.left+25,g.bottom+74,1,0,CYAN,22,110)
         self.rect(g.right-25,g.bottom+1,g.right-1,g.bottom+90,(214,215,204),True,110)
@@ -382,6 +392,7 @@ class App:
 
     def hud(self):
         g=self.game
+        boss=next((e for e in g.enemies if e.alive and e.kind in BOSS_KINDS),None)
         mode_colors={2:CYAN,3:(167,126,24),4:PURPLE}
         self.text(f"{g.mode}D",555,747,42,mode_colors[g.mode])
         label={2:"좌우 이동 + 중력",3:"8방향 자유 이동",4:"정지 + 과거 위치"}[g.mode]
@@ -398,10 +409,12 @@ class App:
             self.text("WORLD PAUSED" if g.time_frozen else "WORLD MOVING",880,610,14,PURPLE)
             self.rect(880,596,1158,600,(224,216,237),True)
             self.rect(880,596,880+278*max(0,g.time_left)/10,600,PURPLE,True)
-        self.text("2 평면  3 자유 이동  4 시간  E 집기  Q 던지기  F1 도움말  ESC 정지",286,30,14,MUTED)
+        self.text('2 평면  3 자유  4 시간  E 집기  Q 상자  F 칼  Z/X 회전  F1 도움말',286,30,14,MUTED)
+        self.text(('각성 ON' if g.awakened else '6챕터 클리어 시 각성')+f' / 회전 {g.view_turn*90}° / 칼 {int(g.knife_owned)} / 1',92,530,14,PURPLE if g.awakened else MUTED)
+        if g.hint_left>0 and boss and ('각성' in g.hint or '칼' in g.hint):self.text(g.hint,92,604,14,CYAN)
         if g.mode==2:
             self.text("A / D 좌우 이동   ·   SPACE 점프",293,101,20,CYAN)
-            self.text("같은 종이가 지금은 높이로 읽힙니다",293,72,16,MUTED)
+            self.text('상자·칼은 80px 이상 낙하해야 피해 / F 칼 투척',293,72,16,MUTED)
         elif g.mode==3:
             self.text("W / A / S / D 자유 이동",293,101,20,(152,115,27))
             self.text("원근 없는 같은 종이가 바닥이 됩니다",293,72,16,MUTED)
@@ -422,8 +435,8 @@ class App:
             self.rect(x-25,y-39,x-25+50*progress,y-35,CYAN,True)
         if g.command_window and g.mode!=4:
             self.rect(285,56,969,121,PAPER,True)
-            self.text('A/D·Space / 3 자유 이동 / 관제창에 사격' if g.mode==2 else 'WASD로 레이저 회피 / 위쪽 관제창에 사격',293,101,20,CYAN)
-            self.text('가는 선은 예고, 굵은 빛은 공격 / 창문을 깨뜨리면 승리',293,72,16,MUTED)
+            self.text('A/D·Space / 3 자유 이동 / 관제창에 사격' if g.mode==2 else 'WASD 회피 / 창문 사격 / F 칼 투척',293,101,20,CYAN)
+            self.text('4 → Z/X 회전 → 2 낙하 / 회전 폭탄은 창문에 6피해',293,72,16,MUTED)
         if g.mode!=4:self.minimap()
 
     def minimap(self):
@@ -447,8 +460,9 @@ class App:
                 a,b=point(laser.x1,laser.y1);c,d=point(laser.x2,laser.y2)
                 self.line(a,b,c,d,RED,230 if laser.active else 90)
         x,y=point(g.player.x,g.player.y);p.draw_circle(x,y,3,*CYAN,255,True)
-        a,b=point(LEFT+self.camera.x,BOTTOM+self.camera.y)
-        c,d=point(RIGHT+self.camera.x,TOP+self.camera.y)
+        corners=[self.camera.to_world(x,y) for x,y in ((LEFT,BOTTOM),(LEFT,TOP),(RIGHT,BOTTOM),(RIGHT,TOP))]
+        a,b=point(min(p[0] for p in corners),min(p[1] for p in corners))
+        c,d=point(max(p[0] for p in corners),max(p[1] for p in corners))
         self.rect(a,b,c,d,CYAN,False,180)
         self.text('LASER CHAMBER' if g.command_window else 'MAP / 갈색 벽: 폭발로 파괴',1014,130,14,MUTED)
 
@@ -468,38 +482,43 @@ class App:
         self.text(f"{ago:g}초 전 / {g.precision:g}초 간격  ·  휠·방향키 선택 / Enter 이동",334,65,16,PURPLE if safe else RED)
 
     def world(self):
-        """Project a read-only scene copy; physics and input remain in world space."""
+        """Project an isolated render copy through the same camera used by aiming."""
         real=self.game
-        self.camera.follow(real.player,real.bounds,real.room.get('arena') if real.command_window else None)
-        dx,dy=self.camera.x,self.camera.y
+        self.camera.follow(real.player,real.bounds,real.room.get('arena') if real.command_window else None,real.view_turn)
+        point=self.camera.to_screen;box=self.camera.box;vector=self.camera.vector
+        scale=self.camera.scale
         g=copy(real)
-        g.bounds=(real.left-dx,real.bottom-dy,real.right-dx,real.top-dy)
-        g.player=replace(real.player,x=real.player.x-dx,y=real.player.y-dy)
-        g.enemies=[replace(e,x=e.x-dx,y=e.y-dy,aim_x=e.aim_x-dx,aim_y=e.aim_y-dy) for e in real.enemies]
-        g.crates=[replace(c,x=c.x-dx,y=c.y-dy) for c in real.crates]
-        g.obstacles=[(a-dx,b-dy,c-dx,d-dy) for a,b,c,d in real.obstacles]
-        g.reinforced={(a-dx,b-dy,c-dx,d-dy) for a,b,c,d in real.reinforced}
-        g.bullets=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.bullets]
-        g.grenades=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.grenades]
-        g.blasts=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.blasts]
-        g.fragments=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.fragments]
-        g.command_window=replace(real.command_window,box=tuple(v-(dx if i%2==0 else dy) for i,v in enumerate(real.command_window.box))) if real.command_window else None
-        g.lasers=[replace(l,x1=l.x1-dx,y1=l.y1-dy,x2=l.x2-dx,y2=l.y2-dy) for l in real.lasers]
-        g.ammo_pickups=[(x-dx,y-dy) for x,y in real.ammo_pickups]
-        g.effects=[[x-dx,y-dy,life,kind] for x,y,life,kind in real.effects]
-        g.history=deque((t,x-dx,y-dy) for t,x,y in real.history)
+        g.bounds=box(real.bounds);g._combat_bounds=box(real._combat_bounds) if real._combat_bounds else None
+        def actor(a):
+            x,y=point(a.x,a.y);ax,ay=point(a.aim_x,a.aim_y)
+            return replace(a,x=x,y=y,aim_x=ax,aim_y=ay,facing=(a.facing-real.view_turn*2)%8,body_turn=0)
+        def moving(obj):
+            x,y=point(obj.x,obj.y);vx,vy=vector(obj.vx,obj.vy)
+            return replace(obj,x=x,y=y,vx=vx,vy=vy)
+        g.player=actor(real.player);g.enemies=[actor(e) for e in real.enemies]
+        g.crates=[moving(c) for c in real.crates];g.knives=[moving(k) for k in real.knives]
+        g.obstacles=[box(r) for r in real.obstacles];g.reinforced={box(r) for r in real.reinforced}
+        g.bullets=[moving(b) for b in real.bullets];g.grenades=[replace(moving(b),radius=b.radius*scale) for b in real.grenades]
+        g.blasts=[replace(b,x=point(b.x,b.y)[0],y=point(b.x,b.y)[1],radius=b.radius*scale) for b in real.blasts]
+        g.fragments=[moving(b) for b in real.fragments]
+        g.command_window=replace(real.command_window,box=box(real.command_window.box)) if real.command_window else None
+        g.lasers=[replace(l,x1=point(l.x1,l.y1)[0],y1=point(l.x1,l.y1)[1],x2=point(l.x2,l.y2)[0],y2=point(l.x2,l.y2)[1],width=l.width*scale) for l in real.lasers]
+        g.ammo_pickups=[point(x,y) for x,y in real.ammo_pickups]
+        g.effects=[[*point(x,y),life,kind] for x,y,life,kind in real.effects]
+        points=[(ago,*point(x,y),safe) for ago,x,y,safe in real.rewind_points()]
+        g.rewind_points=lambda:points
         room=dict(real.room)
-        room['zones']=[[a-dx,b-dy,c-dx,d-dy,s] for a,b,c,d,s in room.get('zones',[])]
-        room['marks']=[[x-dx,y-dy,s] for x,y,s in room.get('marks',[])]
-        if 'arena' in room:room['arena']=[v-(dx if i%2==0 else dy) for i,v in enumerate(room['arena'])]
+        room['zones']=[[*box((a,b,c,d)),label] for a,b,c,d,label in room.get('zones',[])]
+        room['marks']=[[*point(x,y),label] for x,y,label in room.get('marks',[])]
+        if 'arena' in room:room['arena']=box(room['arena'])
         g.levels=list(real.levels);g.levels[g.room_index]=room
-        self.game=g
+        self.game=g;self.scene_scale=scale
         clip=SDL_Rect(int(LEFT),int(HEIGHT-TOP),int(RIGHT-LEFT),int(TOP-BOTTOM))
         SDL_RenderSetClipRect(api.renderer,ctypes.byref(clip))
         try:self.draw_world()
         finally:
             SDL_RenderSetClipRect(api.renderer,None)
-            self.game=real
+            self.game=real;self.scene_scale=1.
 
     def draw_world(self):
         g=self.game
@@ -533,10 +552,21 @@ class App:
             self.sprite(5,*pickup,64)
         for crate in g.crates:
             if g.mode!=2:self.line(crate.x-18,crate.y-24,crate.x+18,crate.y-24,(181,177,154),90)
-            self.sprite(4,crate.x,crate.y+3,79)
+            self.sprite(4,crate.x,crate.y+3*self.scene_scale,79)
+            if crate.fall_distance>=80:self.arrow(crate.x,crate.y-30,0,-1,CYAN,17,170)
             if crate.held:self.text("Q",crate.x-6,crate.y+43,16,CYAN)
             elif math.hypot(crate.x-g.player.x,crate.y-g.player.y)<104:
                 self.text("E 집기",crate.x-24,crate.y+43,14,CYAN)
+        for knife in g.knives:
+            dx,dy=(knife.vx,knife.vy) if math.hypot(knife.vx,knife.vy)>8 else (1,-.35)
+            norm=math.hypot(dx,dy);dx,dy=dx/norm,dy/norm
+            length=22*self.scene_scale
+            color=CYAN if knife.fall_distance>=80 else (106,119,130)
+            self.line(knife.x-dx*length*.5,knife.y-dy*length*.5,knife.x+dx*length,knife.y+dy*length,color)
+            self.line(knife.x-dx*length*.5-dy*3,knife.y-dy*length*.5+dx*3,knife.x+dx*length,knife.y+dy*length,(204,220,225))
+            self.line(knife.x-dx*length,knife.y-dy*length,knife.x-dx*length*.45,knife.y-dy*length*.45,(106,72,43))
+            if math.hypot(knife.x-g.player.x,knife.y-g.player.y)<104*self.scene_scale:
+                self.text('E 칼 회수',knife.x-25,knife.y+25,14,CYAN)
         for e in g.enemies:
             if e.kind=='finalboss' and g.command_window:continue
             if e.alive and e.winding and not g.clear:
@@ -573,17 +603,18 @@ class App:
             self.line(b.x-b.vx/norm*length,b.y-b.vy/norm*length,b.x,b.y,color)
         for laser in g.lasers:self.draw_laser(laser)
         for grenade in g.grenades:
+            bomb_color=CYAN if grenade.redirected else RED
             lift=(max(0,math.sin(math.pi*min(1,grenade.age/grenade.flight_time)))*65 if g.mode!=2 else 0)
             landing=max(0,grenade.flight_time-grenade.age)
             tx,ty=grenade.x+grenade.vx*landing,grenade.y+grenade.vy*landing
             if g.mode==2:ty-=.5*880*.75*landing*landing
-            p.draw_circle(tx,ty,round(grenade.radius*.7),*RED,95,False)
+            p.draw_circle(tx,ty,round(grenade.radius*.7),*bomb_color,95,False)
             self.line(tx-8,ty,tx+8,ty,RED,150)
             self.line(tx,ty-8,tx,ty+8,RED,150)
             self.line(grenade.x,grenade.y,grenade.x,grenade.y+lift,(151,111,39),90)
             p.draw_circle(grenade.x,grenade.y+lift,8,43,48,40,255,True)
             p.draw_circle(grenade.x,grenade.y+lift,5,230,154,45,255,True)
-            self.text(f'{max(0,grenade.fuse):.1f}',grenade.x+10,grenade.y+lift+8,14,RED)
+            self.text(('반사 ' if grenade.redirected else '')+f'{max(0,grenade.fuse):.1f}',grenade.x+10,grenade.y+lift+8,14,bomb_color)
         for blast in g.blasts:
             progress=1-blast.life/.55
             radius=round(blast.radius*(.35+.65*progress))
@@ -618,7 +649,8 @@ class App:
         stage=window.damage_stage
         art=self.commander_art
         y1,y2=round(stage*art.h/4),round((stage+1)*art.h/4)
-        art.clip_draw(0,art.h-y2,art.w,y2-y1,(l+r)/2,(b+t)/2,r-l,t-b)
+        width,height=(t-b,r-l) if self.game.view_turn%2 else (r-l,t-b)
+        art.clip_composite_draw(0,art.h-y2,art.w,y2-y1,-self.game.view_turn*math.pi/2,'',(l+r)/2,(b+t)/2,width,height)
         if window.hp>0:
             hits=(window.max_hp-window.hp)%12
             for i in range(hits):
@@ -725,9 +757,9 @@ class App:
                 "2D: A/D 좌우·SPACE 점프 / 3D·4D: WASD 이동",
                 "마우스 조준 / 왼쪽 발사 / R 장전 (6발 / 합계 최대 42발)",
                 "2/3/4: 모드 전환   ·   E 상자 집기 / Q 던지기",
-                "4D: 휠·방향키로 과거 선택, Enter로 위치 이동",
+                "4D: 휠 과거 선택·Enter 이동 / 각성 후 Z/X 공간 회전",
                 "4D 종료 +1세 / 연속 사망 +1, +2, +4… / 40세 종료",
-                "유탄은 갈색 벽·상자를 파괴 / 보스는 6·12챕터"],"F1 또는 ESC  닫기")
+                "F 칼 투척·E 회수 / 80px 낙하 피해 / 회전 폭탄은 창문 공격"],"F1 또는 ESC  닫기")
 
     def screenshot(self, filename):
         """Capture our SDL framebuffer. No OS/UI automation is used here."""
@@ -877,6 +909,35 @@ class App:
         knife.alive=False;knife.death_elapsed=.8;self.actor(knife,(600,340))
         check('knife_death_keeps_blade_art',self.last_enemy_art[0]=='knife_enemy')
         self.verify_waist_connections(check)
+        # Keep the new input/physics paths inside the packaged EXE self-test too.
+        self.game.start();self.game.room_index=11;self.game.load_room()
+        g=self.game;g.grace=100;g.player.x=2900
+        check('late_chapter_preview_has_awakening',g.awakened)
+        g.grenades=[Grenade(2544,300,0,0,fuse=3,flight_time=10,source=g.enemies[0])]
+        press(p.SDLK_4);press(p.SDLK_x)
+        check('x_rotates_awakened_four_d',g.view_turn==1 and g.mode==4)
+        before=g.grenades[0].fuse;g.tick(.02);self.draw()
+        check('rotated_world_keeps_bomb_frozen',g.grenades[0].fuse==before and g.time_frozen)
+        check('rotated_arena_fits_screen',self.camera.scale<1)
+        sx,sy=self.camera.to_screen(2544,590);wx,wy=self.camera.to_world(sx,sy)
+        check('rotated_aim_round_trip',abs(wx-2544)<.001 and abs(wy-590)<.001)
+        press(p.SDLK_x);check('x_turns_window_below_bomb',g.view_turn==2)
+        press(p.SDLK_2);check('two_d_keeps_rotated_gravity',g.mode==2 and g.view_turn==2)
+        for _ in range(80):
+            g.tick(.02)
+            if g.command_window.hp<36:break
+        self.draw()
+        check('gravity_counter_bomb_damages_glass',g.command_window.hp==30)
+        check('counter_bomb_preserves_ammunition',g.total_ammo==42)
+        press(p.SDLK_f);press(p.SDLK_f)
+        check('f_throws_only_one_knife',len(g.knives)==1 and not g.knife_owned)
+        g.knives[0].x,g.knives[0].y=g.player.x,g.player.y
+        press(p.SDLK_e);check('e_recovers_single_knife',g.knife_owned and not g.knives)
+        press(p.SDLK_z);check('rotation_rejected_outside_four_d',g.view_turn==2)
+        g.die()
+        for _ in range(45):g.tick(.02)
+        press(p.SDLK_RETURN)
+        check('retry_keeps_awakening_resets_view',g.awakened and g.view_turn==0 and g.state=='playing')
         self.game.start()
         self.draw()
         if self.args.capture:self.screenshot(self.args.capture)

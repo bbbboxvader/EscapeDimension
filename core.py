@@ -9,6 +9,7 @@ from pathlib import Path
 from visuals import direction_index, torso_angle, deform_upper_point
 from navigation import Navigator
 from hazards import ObservationWindow,LaserBeam
+from space import turn_point,turn_box,gravity_frame
 
 WIDTH, HEIGHT = 1280, 800
 LEFT, RIGHT, BOTTOM, TOP = 76.0, 1204.0, 154.0, 666.0
@@ -24,6 +25,7 @@ DEATH_DURATION = .8
 ENEMY_BULLET_SPEED = 320.0
 KNIFE_SPEED = 420.0
 BLAST_RADIUS = 148.0
+MIN_LETHAL_FALL = 80.0
 BOSS_KINDS = ('midboss', 'finalboss')
 
 
@@ -84,6 +86,7 @@ class Actor:
     burst_total: int = 0
     burst_delay: float = 0.0
     burst_angle: float = 0.0
+    body_turn: int = 0
 
     def __post_init__(self):
         if self.kind in BOSS_KINDS and self.max_hp == 1:
@@ -100,7 +103,8 @@ class Actor:
     @property
     def box(self):
         # y is the foot anchor plus 22px. Include the sprite's head and torso.
-        return self.x-self.half_width, self.y-22, self.x+self.half_width, self.y+self.head_height
+        a,b,c,d=turn_box((-self.half_width,-22,self.half_width,self.head_height),-self.body_turn)
+        return self.x+a,self.y+b,self.x+c,self.y+d
 
 
 @dataclass
@@ -111,10 +115,24 @@ class Crate:
     vy: float = 0.0
     held: bool = False
     hit_actors: set = field(default_factory=set)
+    fall_distance: float = 0.0
 
     @property
     def box(self):
         return self.x-23, self.y-23, self.x+23, self.y+23
+
+
+@dataclass
+class ThrownKnife:
+    x: float
+    y: float
+    vx: float = 0.0
+    vy: float = 0.0
+    fall_distance: float = 0.0
+    hit_actors: set = field(default_factory=set)
+
+    @property
+    def box(self):return self.x-9,self.y-9,self.x+9,self.y+9
 
 
 @dataclass
@@ -139,6 +157,8 @@ class Grenade:
     age: float = 0.0
     flight_time: float = 1.0
     source: Actor | None = None
+    redirected: bool = False
+    redirect_count: int = 0
 
 
 @dataclass
@@ -168,6 +188,14 @@ class Game:
         self.age = 20
         self.room_index = 0
         self.mode = 2
+        self.awakened = False
+        self.view_turn = 0
+        self._local_depth = 0
+        self._combat_bounds = None
+        self.knife_owned = True
+        self.entry_knife = True
+        self.knives = []
+        self.bomb_clock = 2.2
         self.player = Actor(160.0, self.bottom+PLAYER_HALF)
         self.enemies = []
         self.crates = []
@@ -228,9 +256,65 @@ class Game:
 
     def movement_bounds(self,actor=None):
         if self.command_window is not None and (actor is None or actor.kind=='player'):
-            left,bottom,right,top=self.room['arena']
-            return left,bottom,right,min(top,self.command_window.box[1])
+            return self._combat_bounds
         return self.bounds
+
+    def transform_scene(self,turns):
+        """Temporary local gravity coordinates; never change authored level data."""
+        point=lambda x,y:turn_point(x,y,turns)
+        self.bounds=turn_box(self.bounds,turns)
+        if self._combat_bounds:self._combat_bounds=turn_box(self._combat_bounds,turns)
+        for a in [self.player]+self.enemies:
+            a.x,a.y=point(a.x,a.y);a.aim_x,a.aim_y=point(a.aim_x,a.aim_y)
+            a.facing=(a.facing-2*turns)%8;a.body_turn=(a.body_turn-turns)%4
+            a.route=[point(*p) for p in a.route]
+        for collection in (self.crates,self.knives,self.bullets,self.grenades,self.fragments):
+            for obj in collection:
+                obj.x,obj.y=point(obj.x,obj.y);obj.vx,obj.vy=point(obj.vx,obj.vy)
+        for b in self.blasts:b.x,b.y=point(b.x,b.y)
+        self.obstacles=[turn_box(r,turns) for r in self.obstacles]
+        self.reinforced={turn_box(r,turns) for r in self.reinforced}
+        self.ammo_pickups=[list(point(*p)) for p in self.ammo_pickups]
+        self.effects=[[*point(x,y),life,kind] for x,y,life,kind in self.effects]
+        self.history=deque((t,*point(x,y)) for t,x,y in self.history)
+        if self.command_window:self.command_window.box=turn_box(self.command_window.box,turns)
+        for laser in self.lasers:
+            laser.x1,laser.y1=point(laser.x1,laser.y1);laser.x2,laser.y2=point(laser.x2,laser.y2)
+        room=dict(self.room)
+        for key in ('arena',):
+            if key in room:room[key]=turn_box(room[key],turns)
+        self.levels=list(self.levels);self.levels[self.room_index]=room
+        self._nav_signature=None;self._nav_cache.clear()
+
+    def rotate_view(self,step):
+        if self.state!='playing' or self.mode!=4:return False
+        if not self.awakened:
+            self.message('6챕터를 클리어하면 공간 회전이 각성합니다');return False
+        step=1 if step>0 else -1
+        self.view_turn=(self.view_turn+step)%4
+        for actor in [self.player]+self.enemies:actor.body_turn=self.view_turn
+        for bomb in self.grenades:
+            # Preserve the screen heading while the room turns around the bomb.
+            bomb.vx,bomb.vy=turn_point(bomb.vx,bomb.vy,-step)
+            bomb.redirected=True;bomb.redirect_count+=1
+        for obj in self.crates+self.knives:obj.fall_distance=0
+        self.stabilize_rotation()
+        self.events.append('switch')
+        self.message(f'각성 회전 {self.view_turn*90}° / 2D로 바꾸면 화면 아래로 낙하',3)
+        return True
+
+    @gravity_frame
+    def stabilize_rotation(self):
+        for actor in [self.player]+[e for e in self.enemies if e.kind!='finalboss']:
+            self.move_actor(actor,0,0,0)
+            for box in self.solids():
+                if self.overlap(actor.box,box):
+                    choices=[(abs(actor.box[2]-box[0]),box[0]-actor.half_width,actor.y),
+                             (abs(box[2]-actor.box[0]),box[2]+actor.half_width,actor.y),
+                             (abs(actor.box[3]-box[1]),actor.x,box[1]-actor.head_height),
+                             (abs(box[3]-actor.box[1]),actor.x,box[3]+22)]
+                    _,actor.x,actor.y=min(choices)
+            actor.vy=0
 
     @property
     def speed(self):
@@ -274,16 +358,18 @@ class Game:
     def grounded(self):
         return self.actor_grounded(self.player)
 
+    @gravity_frame
     def actor_grounded(self, actor):
         if self.mode != 2 or not actor.alive or actor.vy > 0:
             return False
         feet = actor.y-PLAYER_HALF
-        if abs(feet-self.bottom) <= .5:
+        if abs(feet-self.movement_bounds(actor)[1]) <= .5:
             return True
         return any(abs(feet-top) <= .5 and actor.x+actor.half_width > left
                    and actor.x-actor.half_width < right
                    for left,bottom,right,top in self.solids())
 
+    @gravity_frame
     def jump(self):
         if self.state != 'playing' or not self.grounded:
             return False
@@ -301,6 +387,7 @@ class Game:
 
     def start(self):
         self.age, self.room_index, self.mode = 20, 0, 2
+        self.awakened=False;self.knife_owned=True
         self.magazine, self.reserve = MAGAZINE_SIZE, MAX_AMMO-MAGAZINE_SIZE
         self.shots = self.kills = self.total_deaths = self.streak = 0
         self.elapsed = 0.0
@@ -310,6 +397,8 @@ class Game:
         self.state = "playing"
         self.bounds = tuple(self.room.get("bounds", (LEFT, BOTTOM, RIGHT, TOP)))
         self.mode = self.room.get('start_mode',2)
+        self.view_turn=0
+        self.awakened=self.awakened or self.room_index>=6
         self.player = Actor(*self.room.get("spawn", [160, 176]))
         self.enemies = [Actor(float(e[0]), float(e[1]), e[2], timer=2.2+i*.45, facing=4, alerted=False)
                         for i, e in enumerate(self.room["enemies"])]
@@ -319,7 +408,10 @@ class Game:
         self.ammo_pickups = [list(p) for p in self.room.get("ammo", [])]
         spec=self.room.get('command_window')
         self.command_window=ObservationWindow(tuple(spec['box']),spec.get('hp',36),spec.get('hp',36)) if spec else None
+        self._combat_bounds=tuple(self.room['arena'][:3])+ (min(self.room['arena'][3],self.command_window.box[1]),) if spec else None
         self.lasers=[];self.laser_clock=1.;self.laser_cycle=0
+        self.bomb_clock=2.2
+        self.knives=[]
         self.settle_initial_layout()
         if self.command_window:
             self.player.x,self.player.y=self.room['spawn']
@@ -345,8 +437,11 @@ class Game:
         self._nav_cache = {}
         if retry:
             self.magazine, self.reserve = self.entry_ammo
+            self.knife_owned=self.entry_knife
         else:
             self.entry_ammo = self.magazine, self.reserve
+            self.entry_knife=self.knife_owned
+        if not self.knife_owned:self.knives=[ThrownKnife(self.player.x+45,self.player.y)]
         self.history.append((0.0, self.player.x, self.player.y))
         self.message(self.room["hint"], 6.0)
 
@@ -443,6 +538,8 @@ class Game:
             if self.state != "playing":
                 return False
         self.mode = mode
+        for actor in [self.player]+self.enemies:actor.body_turn=self.view_turn
+        for obj in self.crates+self.knives:obj.fall_distance=0
         for actor in self.enemies:
             actor.route.clear()
             actor.nav_left = 0
@@ -453,13 +550,14 @@ class Game:
         self.player.vy = 0.0
         if old_mode == 2 and mode in (3, 4):
             # Height velocity does not become motion across the reinterpreted floor.
-            for crate in self.crates:
-                crate.vy = 0.0
+            for obj in self.crates+self.knives:
+                vx,vy=turn_point(obj.vx,obj.vy,self.view_turn)
+                obj.vx,obj.vy=turn_point(vx,0,-self.view_turn)
             for enemy in self.enemies:
                 enemy.vy = 0.0
         if mode == 4:
             self.time_left, self.selected = 10.0, 0
-            self.message("정지 중에도 10초 제한은 흐릅니다. 휠로 과거 선택, Enter로 이동", 4.5)
+            self.message('각성: Z/X 공간 회전 / 휠 과거 선택 / Enter 이동' if self.awakened else '정지 중에도 10초 제한은 흐릅니다. 휠로 과거 선택, Enter로 이동',4.5)
         self.events.append("switch")
         return True
 
@@ -472,6 +570,7 @@ class Game:
         self.age_up(1)
         self.events.append("switch")
 
+    @gravity_frame
     def safe_position(self, x, y):
         left,bottom,right,top=self.movement_bounds(self.player)
         if not left+16 <= x <= right-16 or not bottom+PLAYER_HALF <= y <= top-48:
@@ -514,30 +613,38 @@ class Game:
             return False
         self.player.x, self.player.y, self.player.vy = x, y, 0.0
         if self.held:
-            self.held.x, self.held.y = x, y+49
+            ox,oy=turn_point(0,49,-self.view_turn)
+            self.held.x, self.held.y = x+ox, y+oy
         self.leave_time()
         self.events.append("rewind")
         self.message(f"{ago:g}초 전 위치로 이동 / 나이 +1")
         return True
 
+    @gravity_frame
     def pickup(self):
         if self.state != "playing":
             return False
         if self.clear and self.player.x > self.right-110:
             return self.next_room()
+        nearby_knives=[k for k in self.knives if hypot(k.x-self.player.x,k.y-self.player.y)<104]
+        if not self.knife_owned and nearby_knives:
+            self.knives.remove(min(nearby_knives,key=lambda k:hypot(k.x-self.player.x,k.y-self.player.y)))
+            self.knife_owned=True;self.events.append('pickup');self.message('칼 회수 / F 투척');return True
         if self.held:
             self.message("Q로 물체를 던질 수 있습니다")
             return False
         near = [c for c in self.crates if hypot(c.x-self.player.x, c.y-self.player.y) < 104]
         if not near:
-            self.message("가까운 상자에 다가가 E를 누르세요")
+            self.message('가까운 상자 또는 던진 칼에 다가가 E를 누르세요')
             return False
         crate = min(near, key=lambda c: hypot(c.x-self.player.x, c.y-self.player.y))
         crate.held, crate.vx, crate.vy = True, 0.0, 0.0
         crate.hit_actors.clear()
+        crate.fall_distance=0
         self.events.append("pickup")
         return True
 
+    @gravity_frame
     def throw(self, aim):
         crate = self.held
         if not crate or self.state != "playing":
@@ -547,7 +654,18 @@ class Game:
         crate.x = clamp(self.player.x+dx*48, self.left+24, self.right-24)
         crate.y = clamp(self.player.y+dy*48, self.bottom+24, self.top-24)
         crate.vx, crate.vy = dx*480, dy*480+(100 if self.mode == 2 else 0)
+        crate.fall_distance=0
         self.events.append("throw")
+        return True
+
+    @gravity_frame
+    def throw_knife(self,aim):
+        if self.state!='playing' or not self.knife_owned:return False
+        dx,dy=self.aim_direction(aim)
+        self.knives.append(ThrownKnife(clamp(self.player.x+dx*35,self.left+10,self.right-10),
+                           clamp(self.player.y+24+dy*35,self.bottom+10,self.top-10),dx*530,dy*530))
+        self.knife_owned=False;self.events.append('throw')
+        self.message('칼 투척 / 2D에서 80px 이상 낙하해야 피해 / E 회수',3)
         return True
 
     def reload(self):
@@ -557,6 +675,7 @@ class Game:
             return True
         return False
 
+    @gravity_frame
     def shoot(self, aim):
         if self.state != "playing" or self.reload_left > 0 or self.shot_cooldown > 0:
             return False
@@ -610,39 +729,47 @@ class Game:
             actor.walk_distance += distance
 
     def update_crates(self, dt):
-        for c in self.crates:
-            if c.held:
-                c.x, c.y = self.player.x, min(self.top-24, self.player.y+49)
+        """Crates and the single knife hurt only after real gravity-driven travel."""
+        for c in self.crates+self.knives:
+            knife=isinstance(c,ThrownKnife)
+            half=9 if knife else 23
+            if not knife and c.held:
+                c.x,c.y=self.player.x,min(self.top-half,self.player.y+49)
+                c.fall_distance=0
                 continue
-            if self.mode == 2:
-                c.vy -= GRAVITY*dt
+            old_x,old_y=c.x,c.y
+            if self.mode==2:c.vy-=GRAVITY*dt
             else:
-                c.vx *= max(0, 1-1.5*dt)
-                c.vy *= max(0, 1-1.5*dt)
-            old_x, old_y = c.x, c.y
-            c.x += c.vx*dt
-            c.y += c.vy*dt
-            impact = hypot(c.vx, c.vy)
-            for enemy in self.enemies:
-                if enemy.alive and impact > 125 and id(enemy) not in c.hit_actors and self.overlap(c.box, enemy.box):
-                    c.hit_actors.add(id(enemy))
-                    self.damage_enemy(enemy, 6 if enemy.kind in BOSS_KINDS else 1)
-            if c.y < self.bottom+23:
-                c.y, c.vy, c.vx = self.bottom+23, 0.0, c.vx*.72
-            if c.x < self.left+23 or c.x > self.right-23:
-                c.x, c.vx = clamp(c.x, self.left+23, self.right-23), -c.vx*.3
-            if c.y > self.top-23:
-                c.y, c.vy = self.top-23, 0
+                c.vx*=max(0,1-1.5*dt);c.vy*=max(0,1-1.5*dt)
+            previous_fall=c.fall_distance
+            c.x+=c.vx*dt;c.y+=c.vy*dt
+            c.fall_distance=c.fall_distance+max(0,old_y-c.y) if self.mode==2 and c.vy<0 else 0
+            solid_t=min((t for r in self.solids(skip=c)
+                         if (t:=segment_box(old_x,old_y,c.x,c.y,r,half)) is not None),default=2.)
+            if self.mode==2 and c.vy<0:
+                for enemy in self.enemies:
+                    t=segment_box(old_x,old_y,c.x,c.y,enemy.box,half)
+                    if enemy.alive and t is not None and t<=solid_t and id(enemy) not in c.hit_actors:
+                        c.hit_actors.add(id(enemy))
+                        distance_at_contact=previous_fall+max(0,old_y-c.y)*t
+                        if distance_at_contact>=MIN_LETHAL_FALL:
+                            self.damage_enemy(enemy,6 if enemy.kind in BOSS_KINDS else 1)
+                            self.effects.append([c.x,c.y,.3,'slash' if knife else 'hit'])
+            landed=False
+            if c.y<self.bottom+half:
+                c.y,c.vy,c.vx=self.bottom+half,0.,c.vx*.72;landed=True
+            if c.x<self.left+half or c.x>self.right-half:
+                c.x,c.vx=clamp(c.x,self.left+half,self.right-half),-c.vx*.3
+            if c.y>self.top-half:c.y,c.vy=self.top-half,0;landed=True
             for box in self.solids(skip=c):
-                if self.overlap(c.box, box):
-                    if old_y-23 >= box[3]-.5 and c.vy <= 0:
-                        c.y, c.vy, c.vx = box[3]+23, 0, c.vx*.8
-                    elif old_y+23 <= box[1]+.5 and c.vy > 0:
-                        c.y, c.vy = box[1]-23, 0
-                    elif old_x < c.x:
-                        c.x, c.vx = box[0]-23, 0
-                    elif old_x > c.x:
-                        c.x, c.vx = box[2]+23, 0
+                if self.overlap(c.box,box):
+                    if old_y-half>=box[3]-.5 and c.vy<=0:
+                        c.y,c.vy,c.vx=box[3]+half,0,c.vx*.8;landed=True
+                    elif old_y+half<=box[1]+.5 and c.vy>0:
+                        c.y,c.vy=box[1]-half,0;landed=True
+                    elif old_x<c.x:c.x,c.vx=box[0]-half,0
+                    elif old_x>c.x:c.x,c.vx=box[2]+half,0
+            if landed:c.fall_distance=0
 
     def kill(self, enemy):
         if enemy.alive:
@@ -682,6 +809,7 @@ class Game:
         if not window.hp:
             if boss:self.kill(boss)
             self.lasers.clear()
+            self.grenades.clear()
             self.events.append('glass_break')
             for i in range(22):
                 angle=i*2.4
@@ -691,29 +819,31 @@ class Game:
     def spawn_laser_wave(self):
         left,bottom,right,top=self.movement_bounds(self.player)
         side=('left','top','right','bottom')[self.laser_cycle%4]
-        boss=next(e for e in self.enemies if e.kind=='finalboss')
-        phase=boss.phase
-        x=clamp(self.player.x,left+90,right-90)
-        y=clamp(self.player.y+20,bottom+75,top-75)
-        def beam(direction,position):
-            if direction=='left':args=(left+3,position,right-3,position)
-            elif direction=='right':args=(right-3,position,left+3,position)
-            elif direction=='top':args=(position,top-3,position,bottom+3)
-            else:args=(position,bottom+3,position,top-3)
-            self.lasers.append(LaserBeam(*args,direction,warning=1.15 if phase==1 else 1.05))
-        beam(side,y if side in ('left','right') else x)
-        if phase>=2:
-            beam('top' if side in ('left','right') else 'left',
-                 clamp(x-220,left+70,right-70) if side in ('left','right') else clamp(y+130,bottom+70,top-70))
-        if phase>=3:
-            beam('bottom' if side in ('left','right') else 'right',
-                 clamp(x+220,left+70,right-70) if side in ('left','right') else clamp(y-130,bottom+70,top-70))
-            if side in ('left','right'):
-                beam('right' if side=='left' else 'left',bottom+75 if y>(bottom+top)/2 else top-75)
-            else:
-                beam('bottom' if side=='top' else 'top',left+150 if x>(left+right)/2 else right-150)
+        phase=next(e for e in self.enemies if e.kind=='finalboss').phase
+        # Dense staggered lanes retain gaps wider than the player's body.
+        target_x=clamp(self.player.x,left+70,right-70)
+        target_y=clamp(self.player.y+20,bottom+65,top-65)
+        xs=[target_x]
+        for offset in (-230,230,-430,430):
+            value=clamp(target_x+offset,left+45,right-45)
+            if all(abs(value-v)>100 for v in xs):xs.append(value)
+        ys=[target_y]
+        for value in (bottom+65,top-65,(bottom+top)/2):
+            if all(abs(value-v)>112 for v in ys):ys.append(value)
+        if phase==3:ys=[bottom+65,(bottom+top)/2,top-65]
+        vertical=(2,3,4)[phase-1];horizontal=(1,2,3)[phase-1]
+        # Narrow rotated local arenas still have deliberately avoidable lanes.
+        xs=xs[:vertical];ys=ys[:horizontal]
+        for i,x in enumerate(xs):
+            direction='top' if i%2==0 else 'bottom'
+            args=(x,top-3,x,bottom+3) if direction=='top' else (x,bottom+3,x,top-3)
+            self.lasers.append(LaserBeam(*args,direction,warning=(.9,.85,.8)[phase-1],duration=.48))
+        for i,y in enumerate(ys):
+            direction=side if side in ('left','right') and i==0 else ('left' if i%2==0 else 'right')
+            args=(left+3,y,right-3,y) if direction=='left' else (right-3,y,left+3,y)
+            self.lasers.append(LaserBeam(*args,direction,warning=(.9,.85,.8)[phase-1],duration=.48))
         self.laser_cycle+=1
-        self.laser_clock=(2.8,2.35,2.0)[phase-1]
+        self.laser_clock=(1.55,1.4,1.3)[phase-1]
         self.events.append('laser_charge')
 
     def update_command_stage(self,dt):
@@ -725,8 +855,13 @@ class Game:
             self.lasers.clear();return
         boss.phase=1+(window.hp<=window.max_hp*2/3)+(window.hp<=window.max_hp/3)
         if self.grace<=0:
-            self.laser_clock-=dt
+            self.laser_clock-=dt;self.bomb_clock-=dt
             if self.laser_clock<=0:self.spawn_laser_wave()
+            if self.bomb_clock<=0:
+                self.launch_grenade(boss,(self.player.x,self.player.y+18))
+                if boss.phase==3:
+                    self.launch_grenade(boss,(clamp(self.player.x+160,*self.movement_bounds()[::2]),self.player.y+18))
+                self.bomb_clock=(2.7,2.3,1.9)[boss.phase-1]
         for laser in self.lasers:
             was_active=laser.active
             laser.age+=dt
@@ -741,6 +876,8 @@ class Game:
     def explode(self, grenade):
         """Near-cover blast tests use the nearest edge, not the wall centre."""
         x,y,radius = grenade.x,grenade.y,grenade.radius
+        if grenade.redirected and self.command_window and self.distance_to_rect(x,y,self.command_window.box)<=radius*.7:
+            self.damage_window(6,(x,y))
         removed=[r for r in self.obstacles if r not in self.reinforced
                  and self.distance_to_rect(x,y,r)<=radius]
         self.obstacles=[r for r in self.obstacles if r not in removed]
@@ -778,7 +915,7 @@ class Game:
 
     def update_grenades(self, dt):
         kept=[]
-        for grenade in self.grenades:
+        for grenade in list(self.grenades):
             grenade.age+=dt;grenade.fuse-=dt
             if grenade.age>=grenade.flight_time and self.mode!=2:
                 grenade.vx=grenade.vy=0
@@ -788,6 +925,8 @@ class Game:
                 grenade.vy-=GRAVITY*.75*dt
             contact=min((t for r in self.solids()
                          if (t:=segment_box(grenade.x,grenade.y,nx,ny,r,7)) is not None),default=2.)
+            window_t=segment_box(grenade.x,grenade.y,nx,ny,self.command_window.box,7) if self.command_window and grenade.redirected else None
+            if window_t is not None and window_t<=contact:contact=window_t
             edge=not self.left+7<nx<self.right-7 or not self.bottom+7<ny<self.top-7
             if contact<=1:
                 grenade.x+=(nx-grenade.x)*contact;grenade.y+=(ny-grenade.y)*contact
@@ -796,6 +935,8 @@ class Game:
                 grenade.x=clamp(grenade.x,self.left+7,self.right-7)
                 grenade.y=clamp(grenade.y,self.bottom+7,self.top-7)
                 self.explode(grenade)
+                if self.command_window and self.command_window.hp<=0:
+                    kept=[];break
             else:kept.append(grenade)
         self.grenades=kept
         for b in self.blasts:b.life-=dt
@@ -1010,6 +1151,7 @@ class Game:
                 kept.append(b)
         self.bullets = kept
 
+    @gravity_frame
     def tick(self, dt, move=(0, 0), aim=(900, 300), firing=False):
         dt = clamp(dt, 0, .05)
         if self.state in ('dead','over'):
@@ -1028,6 +1170,7 @@ class Game:
                 if self.state != "playing":
                     return
         mx, my = move
+        if self.mode!=2 and self.view_turn and not self._local_depth:mx,my=turn_point(mx,my,-self.view_turn)
         if self.mode == 2:
             my = 0
         length = hypot(mx, my)
@@ -1040,7 +1183,8 @@ class Game:
         world_dt = 0.0 if self.time_frozen else dt
         self.effects = [[x,y,life-world_dt,kind] for x,y,life,kind in self.effects if life>world_dt]
         if self.held:
-            self.held.x, self.held.y = self.player.x, min(self.top-24, self.player.y+49)
+            ox,oy=turn_point(0,49,-self.view_turn if not self._local_depth else 0)
+            self.held.x,self.held.y=self.player.x+ox,self.player.y+oy
         if self.reload_left > 0:
             self.reload_left -= world_dt
             if self.reload_left <= 0:
@@ -1079,7 +1223,9 @@ class Game:
                         self.message(f"탄약이 가득 찼습니다 / 합계 {MAX_AMMO}발")
         if not any(e.alive for e in self.enemies) and not self.clear:
             self.clear = True
-            self.message('관제창 파괴! 레이저 정지 / Enter 탈출' if self.command_window else '챕터 클리어! Enter 또는 오른쪽 출구로 다음 챕터',30)
+            if self.room_index==5 and not self.awakened:
+                self.awakened=True;self.events.append('rewind')
+            self.message('각성 해금! 4D에서 Z/X 회전 / Enter 다음 챕터' if self.room_index==5 else '관제창 파괴! 레이저 정지 / Enter 탈출' if self.command_window else '챕터 클리어! Enter 또는 오른쪽 출구로 다음 챕터',30)
             self.events.append("clear")
         if self.clear and self.player.x >= self.right-29:
             self.next_room()

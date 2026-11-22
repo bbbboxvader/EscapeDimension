@@ -35,7 +35,10 @@ try:
     check('machinegun_does_not_launch_grenades',not g.grenades)
     chapter(11);g=app.game;g.grace=100
     g.damage_window(24);g.update_command_stage(.01);g.spawn_laser_wave()
-    g.player.y=354;g.grace=0
+    l,b,r,t=g.movement_bounds()
+    g.player.x,g.player.y=next((x,y) for x in range(int(l+35),int(r-35),20) for y in range(int(b+25),int(t-50),15)
+        if not any(g.overlap((x-15,y-22,x+15,y+48),beam.box) for beam in g.lasers))
+    g.grace=0
     check('final_phase_emits_from_all_four_sides',{l.side for l in g.lasers}=={'left','right','top','bottom'})
     g.update_command_stage(.65);capture('commander-laser-warning')
     check('laser_warning_is_visually_distinct',all(not l.active for l in g.lasers))

@@ -83,7 +83,7 @@ class Rules(unittest.TestCase):
         game=sandbox();game.crates=[Crate(game.player.x+50,game.player.y)]
         self.assertTrue(game.pickup());self.assertTrue(game.throw((900,300)));self.assertIsNone(game.held)
         game.enemies=[Actor(750,BOTTOM+22,'sentry')];game.grace=100
-        game.crates=[Crate(750,BOTTOM+160)]
+        game.crates=[Crate(750,BOTTOM+200)]
         for _ in range(30):game.tick(.025)
         self.assertFalse(game.enemies[0].alive)
 

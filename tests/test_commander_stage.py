@@ -55,7 +55,7 @@ class CommanderStageTests(unittest.TestCase):
         self.assertTrue(all(not l.active for l in g.lasers))
 
     def test_window_damage_adds_crossfire_and_third_phase(self):
-        for damage,phase,count in [(0,1,1),(12,2,2),(24,3,4)]:
+        for damage,phase,count in [(0,1,3),(12,2,5),(24,3,7)]:
             g=final_stage();g.damage_window(damage);g.update_command_stage(.01)
             self.assertEqual(g.enemies[0].phase,phase)
             g.spawn_laser_wave();self.assertEqual(len(g.lasers),count)
