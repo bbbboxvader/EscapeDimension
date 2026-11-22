@@ -1,15 +1,25 @@
 {
   "rules": {
     "status": "pass",
-    "count": 58,
+    "count": 82,
     "failures": 0,
     "errors": 0
   },
   "engine": "Python + pico2d",
   "limitations": "Automated rule and input checks; human balance testing remains.",
+  "executable_input": {
+    "status": "pass",
+    "count": 68
+  },
+  "executable_sha256": "ab607eec816a0f7cde8439155859a9273796bcbf5d5d3a6f68e1b8232bcea4b7",
+  "executable_bytes": 35335716,
   "source_input": {
     "status": "pass",
-    "count": 68,
-    "entry_point": "main.py"
-  }
+    "count": 68
+  },
+  "campaign_input": {
+    "status": "pass",
+    "count": 22
+  },
+  "chapters": 12
 }

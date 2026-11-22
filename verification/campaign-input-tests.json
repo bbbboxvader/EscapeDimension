@@ -1,0 +1,29 @@
+{
+  "status": "pass",
+  "count": 22,
+  "checks": [
+    "title_selects_chapter_12",
+    "chapter_01_renders_without_mutating_world",
+    "chapter_02_renders_without_mutating_world",
+    "chapter_03_renders_without_mutating_world",
+    "chapter_04_renders_without_mutating_world",
+    "chapter_05_renders_without_mutating_world",
+    "chapter_06_renders_without_mutating_world",
+    "chapter_07_renders_without_mutating_world",
+    "chapter_08_renders_without_mutating_world",
+    "chapter_09_renders_without_mutating_world",
+    "chapter_10_renders_without_mutating_world",
+    "chapter_11_renders_without_mutating_world",
+    "chapter_12_renders_without_mutating_world",
+    "chapter-06-midboss_visible_with_scrolled_camera",
+    "chapter-12-finalboss_visible_with_scrolled_camera",
+    "grenadier_atlas_loaded",
+    "grenade_wall_breach_renders",
+    "camera_scrolls_past_original_room",
+    "mouse_screen_to_world_after_scroll",
+    "scrolled_mouse_shot_hits_actual_world_target",
+    "scrolled_ghost_click_selects_correct_past_position",
+    "scrolled_rewind_returns_to_world_position"
+  ],
+  "chapters": 12
+}

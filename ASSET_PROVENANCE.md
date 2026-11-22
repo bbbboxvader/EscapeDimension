@@ -1,5 +1,11 @@
 # 이미지와 소리 출처
 
+## 2026-11-22: 유탄병과 보스
+
+`assets/special_enemies.png`는 기존 캐릭터 시트를 화풍 참고로 사용하고 OpenAI 내장 `image_gen` 도구로 제작한 실제 RGBA 투명 스프라이트입니다. 유탄병, 중간보스, 최종보스 각각의 8방향을 담은 4열×6행 시트입니다. 방향은 두 행씩 E·NE·N·NW / W·SW·S·SE 순입니다. 최종 프롬프트는 [special_enemies.prompt.txt](assets/special_enemies.prompt.txt)에 보관합니다.
+
+걷기는 위치에 따른 상하 움직임, 사망은 회전·하강으로 표현하며 기존 플레이어의 걷기·장전·사망 시트는 유지합니다. 폭발·파편·공격 예고는 게임 코드의 기본 그리기로 표시합니다. `grenade.wav`, `explosion.wav`는 [tools/generate_combat_sounds.py](tools/generate_combat_sounds.py)의 사인파·잡음 합성으로 제작했습니다.
+
 ## 칼 추적 적
 
 `assets/knife_enemy.png`는 기존 `characters_8dir.png`를 화풍과 시점 참고 자료로 사용하여 OpenAI 내장 `image_gen` 도구로 제작했습니다. 주황색 후드·검은 장비·은색 칼을 갖춘 8방향 × 2달리기 프레임의 4열×4행 알파 투명 시트입니다. 전체 프롬프트는 [knife_enemy.prompt.txt](assets/knife_enemy.prompt.txt)에 보관합니다.
