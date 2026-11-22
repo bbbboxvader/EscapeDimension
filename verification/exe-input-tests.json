@@ -68,7 +68,20 @@
     "waist_connected_aim_4_45",
     "waist_connected_aim_4_85",
     "waist_connected_reload_walk_4_0",
-    "waist_connected_reload_walk_4_8"
+    "waist_connected_reload_walk_4_8",
+    "late_chapter_preview_has_awakening",
+    "x_rotates_awakened_four_d",
+    "rotated_world_keeps_bomb_frozen",
+    "rotated_arena_fits_screen",
+    "rotated_aim_round_trip",
+    "x_turns_window_below_bomb",
+    "two_d_keeps_rotated_gravity",
+    "gravity_counter_bomb_damages_glass",
+    "counter_bomb_preserves_ammunition",
+    "f_throws_only_one_knife",
+    "e_recovers_single_knife",
+    "rotation_rejected_outside_four_d",
+    "retry_keeps_awakening_resets_view"
   ],
-  "count": 68
+  "count": 81
 }

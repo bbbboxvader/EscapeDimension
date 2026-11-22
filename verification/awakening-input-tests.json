@@ -1,0 +1,24 @@
+{
+  "status": "pass",
+  "count": 17,
+  "checks": [
+    "actual_bullet_clear_unlocks_awakening",
+    "x_rotates_clockwise_only_in_four_d",
+    "z_reverses_rotation",
+    "rotation_is_locked_outside_four_d",
+    "f_throws_single_knife",
+    "cannot_throw_second_knife",
+    "e_recovers_knife",
+    "phase_three_has_seven_warning_beams",
+    "dense_active_pattern_has_a_safe_cell",
+    "rotated_mouse_inverse_matches_window",
+    "all_final_arena_visible_at_90_degrees",
+    "rotated_four_d_still_freezes_bomb",
+    "two_turns_put_window_below_bomb",
+    "two_d_gravity_counter_bomb_hits_glass",
+    "counter_bomb_does_not_consume_ammo",
+    "rotated_render_keeps_world_geometry",
+    "knife_kills_after_long_gravity_fall"
+  ],
+  "scope": "Isolated SDL control/render checks; survival uses normal-damage simulation tests."
+}

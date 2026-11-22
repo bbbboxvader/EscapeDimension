@@ -1,7 +1,7 @@
 {
   "state": "won",
   "window_hp": 0,
-  "seconds": 13.23,
+  "seconds": 13.9,
   "shots": 36,
   "deaths": 0,
   "sides_seen": [
@@ -10,5 +10,7 @@
     "right",
     "top"
   ],
-  "age": 20
+  "bombs_seen_at_once": 2,
+  "age": 20,
+  "controls": "Normal movement, firing and reload; no invulnerability or damage overrides."
 }

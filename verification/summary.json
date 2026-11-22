@@ -1,7 +1,7 @@
 {
   "rules": {
     "status": "pass",
-    "count": 98,
+    "count": 123,
     "failures": 0,
     "errors": 0
   },
@@ -9,14 +9,13 @@
   "limitations": "Automated rule and input checks; human balance testing remains.",
   "executable_input": {
     "status": "pass",
-    "count": 68
+    "count": 81
   },
-  "executable_sha256": "0029251ef4b703d4c0da01b229c2191776d9db137abf501c3248842cead9a350",
-  "executable_bytes": 39262602,
+  "executable_sha256": "285e0f99d16c5b114a837292503b6ed7f2411b94995eb7f4e7a94ca15f83bd1c",
+  "executable_bytes": 34114017,
   "source_input": {
     "status": "pass",
-    "count": 68,
-    "entry_point": "main.py"
+    "count": 81
   },
   "campaign_input": {
     "status": "pass",
@@ -26,10 +25,15 @@
     "status": "pass",
     "count": 47
   },
+  "awakening_input": {
+    "status": "pass",
+    "count": 17
+  },
+  "chapters": 12,
   "commander_clear": {
     "state": "won",
     "window_hp": 0,
-    "seconds": 13.23,
+    "seconds": 13.9,
     "shots": 36,
     "deaths": 0,
     "sides_seen": [
@@ -38,7 +42,8 @@
       "right",
       "top"
     ],
-    "age": 20
-  },
-  "chapters": 12
+    "bombs_seen_at_once": 2,
+    "age": 20,
+    "controls": "Normal movement, firing and reload; no invulnerability or damage overrides."
+  }
 }
