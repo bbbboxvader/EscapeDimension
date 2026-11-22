@@ -44,9 +44,10 @@ try:
         chapter(index);g=app.game;boss=next(e for e in g.enemies if e.kind in BOSS_KINDS)
         g.player.x,g.player.y=boss.x-330,280;g.grace=0
         boss.alerted=True;boss.timer=.85
+        if g.command_window:g.laser_clock=.01
         g.tick(.02)
         app.mouse=(900,250);app.draw();app.screenshot(str(out/(name+'.png')))
-        check(name+'_visible_with_scrolled_camera',app.camera.x>0 and boss.winding)
+        check(name+'_visible_with_scrolled_camera',app.camera.x>0 and (bool(g.lasers) if g.command_window else boss.winding))
     chapter(1);g=app.game;enemy=next(e for e in g.enemies if e.kind=='grenadier')
     g.player.x,g.player.y=enemy.x-210,480
     app.mouse=(900,450);app.draw();app.screenshot(str(out/'grenadier.png'))
@@ -88,5 +89,5 @@ try:
     (out/'input-and-render.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps({'status':'pass','count':len(checks),'chapters':12}))
 finally:
-    app.motion_atlases.clear();del app.atlas,app.characters,app.special_enemies
+    app.motion_atlases.clear();del app.atlas,app.characters,app.special_enemies,app.elite_gunner,app.commander_art
     p.close_canvas()

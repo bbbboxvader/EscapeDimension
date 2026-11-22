@@ -27,10 +27,13 @@ class CampaignTests(unittest.TestCase):
                 if e.kind in BOSS_KINDS:bosses.append((i+1,e.kind,e.hp))
         self.assertEqual(bosses,[(6,'midboss',18),(12,'finalboss',36)])
 
-    def test_grenadiers_are_present_after_intro_and_in_final_chapter(self):
+    def test_grenadiers_are_present_in_main_chapters_and_final_is_laser_stage(self):
         g=Game()
         self.assertFalse(any(e[2]=='grenadier' for e in g.levels[0]['enemies']))
-        for r in g.levels[1:]:self.assertTrue(any(e[2]=='grenadier' for e in r['enemies']))
+        for r in g.levels[1:-1]:self.assertTrue(any(e[2]=='grenadier' for e in r['enemies']))
+        g.room_index=11;g.load_room()
+        self.assertIsNotNone(g.command_window)
+        self.assertEqual([e.kind for e in g.enemies],['finalboss'])
 
     def test_far_enemies_do_not_attack_at_chapter_entry(self):
         g=Game();g.start();g.set_mode(3);g.grace=0
@@ -161,18 +164,15 @@ class BossTests(unittest.TestCase):
         for _ in range(8):g.update_crates(.005)
         self.assertEqual(boss.hp,12)
 
-    def test_boss_phase_changes_and_attack_patterns(self):
-        for kind,max_hp,patterns in [('midboss',18,2),('finalboss',36,3)]:
-            g=arena();g.grace=0;e=Actor(800,300,kind);g.enemies=[e]
-            g.player=Actor(400,300);e.hp=max_hp//2
-            for pattern in range(patterns):
-                g.bullets=[];g.grenades=[];e.timer=0;e.attack_cycle=pattern
-                e.winding=True;e.aim_x,e.aim_y=400,324
-                g.update_boss(e,.01,400)
-                self.assertEqual(e.phase,2)
-                self.assertTrue(g.grenades if pattern==1 else g.bullets)
-            if kind=='finalboss':
-                e.hp=8;e.timer=5;g.update_boss(e,.01,400);self.assertEqual(e.phase,3)
+    def test_elite_machinegun_bursts_get_longer_at_half_health(self):
+        for hp,expected in [(18,12),(9,18)]:
+            g=arena();g.grace=0;e=Actor(800,300,'midboss');g.enemies=[e]
+            g.player=Actor(400,300);e.hp=hp;e.timer=0;e.aim_x,e.aim_y=400,324
+            for _ in range(80):g.update_boss(e,.02,400)
+            self.assertEqual(len(g.bullets),expected)
+            self.assertTrue(all(b.style=='machinegun' for b in g.bullets))
+            self.assertFalse(g.grenades)
+            self.assertEqual(e.phase,1 if hp==18 else 2)
 
     def test_boss_large_body_uses_a_collision_safe_route(self):
         g=arena();g.grace=0;e=Actor(260,340,'finalboss');g.enemies=[e]

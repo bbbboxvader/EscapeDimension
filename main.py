@@ -71,7 +71,10 @@ class App:
         self.cw, self.ch = self.atlas.w//3, self.atlas.h//2
         self.characters = p.load_image(str(ASSETS/"characters_8dir.png"))
         self.special_enemies = p.load_image(str(ASSETS/'special_enemies.png'))
+        self.elite_gunner = p.load_image(str(ASSETS/'elite_gunner.png'))
+        self.commander_art = p.load_image(str(ASSETS/'commander_window.png'))
         self.motion_atlases = {'idle':self.characters}
+        self.motion_atlases['elite']=self.elite_gunner
         for name in ('walk_player','walk_enemy','reload_player','death_both','knife_enemy'):
             self.motion_atlases[name] = p.load_image(str(ASSETS/(name+'.png')))
         fonts = [Path("C:/Windows/Fonts/malgun.ttf"), Path(os.getenv("PICO2D_DATA_PATH", ""))/"ConsolaMalgun.TTF",
@@ -82,7 +85,7 @@ class App:
         self.fonts = {size:p.load_font(str(self.fontpath),size) for size in (14,16,18,20,23,26,32,42,66)}
         self.sounds = {}
         if api.audio_on:
-            for name in ("shot","switch","hit","death","reload","pickup","clear","rewind","enemy_shot","win","throw","grenade","explosion"):
+            for name in ("shot","switch","hit","death","reload","pickup","clear","rewind","enemy_shot","win","throw","grenade","explosion","machinegun","glass_hit","glass_break","laser_charge","laser_fire"):
                 f = ASSETS/(name+".wav")
                 if f.exists():
                     self.sounds[name] = p.load_wav(str(f))
@@ -109,7 +112,7 @@ class App:
         if self.selected_chapter:
             self.game.room_index=self.selected_chapter
             self.game.load_room()
-        self.camera.follow(self.game.player,self.game.bounds)
+        self.camera.follow(self.game.player,self.game.bounds,self.game.room.get('arena') if self.game.command_window else None)
 
     @property
     def world_mouse(self):
@@ -193,6 +196,9 @@ class App:
         facing = direction_index(dx,dy,self.game.mode) if player and actor.alive else actor.facing
         if player:
             self.player_facing = facing
+        if actor.kind=='midboss':
+            self.elite_actor(actor,target,alpha)
+            return
         if actor.kind in ('grenadier',*BOSS_KINDS):
             self.special_actor(actor,alpha)
             return
@@ -247,6 +253,21 @@ class App:
             self.text(label,actor.x-23,actor.y+size*.78,14,(155,103,30) if group<2 else PURPLE)
             if group and actor.phase>1:
                 p.draw_circle(actor.x,actor.y+20,45+group*7,*PURPLE,100,False)
+
+    def elite_actor(self,actor,target,alpha):
+        firing=actor.burst_left>0 and int(self.ui_time*24)%2==0
+        frame=actor.facing+(8 if firing else 0)
+        if actor.hurt_left>0 and int(self.ui_time*24)%2:alpha=min(alpha,110)
+        y=actor.y+33
+        if actor.moving:y+=abs(math.sin(actor.walk_distance*.12))*2
+        if actor.alive and self.game.mode==2:
+            angle=torso_angle(target[0]-actor.x,target[1]-actor.y-28)
+            self.character_layers(('elite',frame),('elite',actor.facing),actor.x,y,125,alpha,angle)
+        else:
+            progress=clamp(actor.death_elapsed/DEATH_DURATION,0,1) if not actor.alive else 0
+            self.character_frame(frame,actor.x,y-progress*23,125,alpha,'elite',progress*math.pi/2)
+        if actor.alive:
+            self.text('엘리트 기관총 사수',actor.x-49,actor.y+110,14,(149,106,43))
 
     def events(self):
         for event in p.get_events():
@@ -387,7 +408,8 @@ class App:
         else:self.timeline()
         boss=next((e for e in g.enemies if e.alive and e.kind in BOSS_KINDS),None)
         if boss:
-            self.text(f"{g.room.get('boss_name','보스')}  /  {boss.phase}단계",450,686,18,PURPLE)
+            label='관제창 내구도' if g.command_window else g.room.get('boss_name','보스')
+            self.text(f"{label}  /  {boss.phase}단계",450,686,18,PURPLE)
             self.rect(450,675,890,680,(221,212,230),True)
             self.rect(450,675,450+440*boss.hp/boss.max_hp,680,PURPLE,True)
             self.text(f'{boss.hp} / {boss.max_hp}',900,682,16,PURPLE)
@@ -398,13 +420,18 @@ class App:
             x,y=self.camera.to_screen(g.player.x,g.player.y)
             self.rect(x-25,y-39,x+25,y-35,(219,221,216),True)
             self.rect(x-25,y-39,x-25+50*progress,y-35,CYAN,True)
+        if g.command_window and g.mode!=4:
+            self.rect(285,56,969,121,PAPER,True)
+            self.text('A/D·Space / 3 자유 이동 / 관제창에 사격' if g.mode==2 else 'WASD로 레이저 회피 / 위쪽 관제창에 사격',293,101,20,CYAN)
+            self.text('가는 선은 예고, 굵은 빛은 공격 / 창문을 깨뜨리면 승리',293,72,16,MUTED)
         if g.mode!=4:self.minimap()
 
     def minimap(self):
         g=self.game
         left,bottom,width,height=1014,44,190,77
-        sx=width/(g.right-g.left);sy=height/(g.top-g.bottom)
-        def point(x,y):return left+(x-g.left)*sx,bottom+(y-g.bottom)*sy
+        ml,mb,mr,mt=g.room['arena'] if g.command_window else g.bounds
+        sx=width/(mr-ml);sy=height/(mt-mb)
+        def point(x,y):return left+(x-ml)*sx,bottom+(y-mb)*sy
         self.rect(left,bottom,left+width,bottom+height,(225,224,214),True)
         for r in g.obstacles:
             a,b=point(r[0],r[1]);c,d=point(r[2],r[3])
@@ -412,11 +439,18 @@ class App:
         for e in g.enemies:
             if e.alive:
                 x,y=point(e.x,e.y);p.draw_circle(x,y,3 if e.kind in BOSS_KINDS else 2,*RED,235,True)
+        if g.command_window:
+            a,b,c,d=g.command_window.box
+            x1,y1=point(a,b);x2,y2=point(c,d)
+            self.rect(x1,y1,x2,y2,(179,139,54) if g.command_window.hp else MUTED,True)
+            for laser in g.lasers:
+                a,b=point(laser.x1,laser.y1);c,d=point(laser.x2,laser.y2)
+                self.line(a,b,c,d,RED,230 if laser.active else 90)
         x,y=point(g.player.x,g.player.y);p.draw_circle(x,y,3,*CYAN,255,True)
         a,b=point(LEFT+self.camera.x,BOTTOM+self.camera.y)
         c,d=point(RIGHT+self.camera.x,TOP+self.camera.y)
         self.rect(a,b,c,d,CYAN,False,180)
-        self.text('MAP / 갈색 벽: 폭발로 파괴',1014,130,14,MUTED)
+        self.text('LASER CHAMBER' if g.command_window else 'MAP / 갈색 벽: 폭발로 파괴',1014,130,14,MUTED)
 
     def timeline(self):
         g=self.game;points=g.rewind_points()
@@ -436,7 +470,7 @@ class App:
     def world(self):
         """Project a read-only scene copy; physics and input remain in world space."""
         real=self.game
-        self.camera.follow(real.player,real.bounds)
+        self.camera.follow(real.player,real.bounds,real.room.get('arena') if real.command_window else None)
         dx,dy=self.camera.x,self.camera.y
         g=copy(real)
         g.bounds=(real.left-dx,real.bottom-dy,real.right-dx,real.top-dy)
@@ -449,12 +483,15 @@ class App:
         g.grenades=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.grenades]
         g.blasts=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.blasts]
         g.fragments=[replace(b,x=b.x-dx,y=b.y-dy) for b in real.fragments]
+        g.command_window=replace(real.command_window,box=tuple(v-(dx if i%2==0 else dy) for i,v in enumerate(real.command_window.box))) if real.command_window else None
+        g.lasers=[replace(l,x1=l.x1-dx,y1=l.y1-dy,x2=l.x2-dx,y2=l.y2-dy) for l in real.lasers]
         g.ammo_pickups=[(x-dx,y-dy) for x,y in real.ammo_pickups]
         g.effects=[[x-dx,y-dy,life,kind] for x,y,life,kind in real.effects]
         g.history=deque((t,x-dx,y-dy) for t,x,y in real.history)
         room=dict(real.room)
         room['zones']=[[a-dx,b-dy,c-dx,d-dy,s] for a,b,c,d,s in room.get('zones',[])]
         room['marks']=[[x-dx,y-dy,s] for x,y,s in room.get('marks',[])]
+        if 'arena' in room:room['arena']=[v-(dx if i%2==0 else dy) for i,v in enumerate(room['arena'])]
         g.levels=list(real.levels);g.levels[g.room_index]=room
         self.game=g
         clip=SDL_Rect(int(LEFT),int(HEIGHT-TOP),int(RIGHT-LEFT),int(TOP-BOTTOM))
@@ -467,6 +504,12 @@ class App:
     def draw_world(self):
         g=self.game
         self.map_details()
+        if g.command_window:
+            l,b,r,t=g.movement_bounds(g.player)
+            self.rect(l,b,l+6,t,(88,98,109),True)
+            self.rect(r-6,b,r,t,(88,98,109),True)
+            self.rect(l,b,r,b+6,(88,98,109),True)
+            self.rect(l,t-6,r,t,(88,98,109),True)
         if g.mode==4:
             points=g.rewind_points()
             for i,(_,x,y,safe) in enumerate(points):
@@ -495,10 +538,11 @@ class App:
             elif math.hypot(crate.x-g.player.x,crate.y-g.player.y)<104:
                 self.text("E 집기",crate.x-24,crate.y+43,14,CYAN)
         for e in g.enemies:
+            if e.kind=='finalboss' and g.command_window:continue
             if e.alive and e.winding and not g.clear:
                 self.line(e.x,e.y+24,e.aim_x,e.aim_y,RED,145 if g.time_frozen else 220)
                 p.draw_circle(e.aim_x,e.aim_y,10,*RED,145,False)
-                grenade_attack=(e.kind=='grenadier' or (e.kind in BOSS_KINDS and e.attack_cycle%(3 if e.kind=='finalboss' else 2)==1))
+                grenade_attack=e.kind=='grenadier'
                 if grenade_attack:
                     p.draw_circle(e.aim_x,e.aim_y,100,*RED,85,False)
                 elif e.kind in BOSS_KINDS:
@@ -508,10 +552,11 @@ class App:
                     else:
                         angle=math.atan2(e.aim_y-e.y-24,e.aim_x-e.x)
                         length=math.hypot(e.aim_x-e.x,e.aim_y-e.y-24)
-                        for delta in (-.35,.35) if e.kind=='midboss' else (-.575,.575):
+                        for delta in (-.04,.04) if e.kind=='midboss' else (-.575,.575):
                             self.line(e.x,e.y+24,e.x+math.cos(angle+delta)*length,e.y+24+math.sin(angle+delta)*length,RED,65)
             target=(e.aim_x,e.aim_y) if e.winding else (g.player.x,g.player.y+24)
             self.actor(e,target)
+        if g.command_window:self.draw_command_window()
         self.actor(g.player,self.mouse,player=True)
         if g.player.alive:
             dx,dy=g.aim_direction(self.mouse)
@@ -521,10 +566,12 @@ class App:
         if g.grace>0 and g.player.alive:
             p.draw_circle(g.player.x,g.player.y,35,*CYAN,100,False)
         for b in g.bullets:
-            color=CYAN if b.owner=="player" else RED
+            color=CYAN if b.owner=="player" else (228,166,55) if b.style=='machinegun' else RED
             p.draw_circle(b.x,b.y,4,*color,255,True)
             norm=math.hypot(b.vx,b.vy) or 1
-            self.line(b.x-b.vx/norm*12,b.y-b.vy/norm*12,b.x,b.y,color)
+            length=24 if b.style=='machinegun' else 12
+            self.line(b.x-b.vx/norm*length,b.y-b.vy/norm*length,b.x,b.y,color)
+        for laser in g.lasers:self.draw_laser(laser)
         for grenade in g.grenades:
             lift=(max(0,math.sin(math.pi*min(1,grenade.age/grenade.flight_time)))*65 if g.mode!=2 else 0)
             landing=max(0,grenade.flight_time-grenade.age)
@@ -544,24 +591,66 @@ class App:
             p.draw_circle(blast.x,blast.y,radius,216,78,47,int(240*(1-progress)),False)
             p.draw_circle(blast.x,blast.y,max(1,round(radius*.55)),255,220,144,int(180*(1-progress)),True)
         for fragment in g.fragments:
-            self.rect(fragment.x-3,fragment.y-3,fragment.x+3,fragment.y+3,(139,119,88),True,int(255*fragment.life/.8))
+            color=(146,211,228) if fragment.glass else (139,119,88)
+            self.rect(fragment.x-3,fragment.y-3,fragment.x+3,fragment.y+3,color,True,int(255*clamp(fragment.life/.8,0,1)))
         for x,y,life,kind in g.effects:
             color=RED if kind=="hit" else (211,166,38)
             if kind=='slash':color=(220,114,33)
             if kind=="flash":color=(218,161,25)
+            if kind=='glass':color=(150,218,237)
             radius=9 if kind=="flash" else int(25*(1-life/.45))
             p.draw_circle(x,y,max(2,radius),*color,int(clamp(life*700,0,255)),False)
         # Exit is only emphasized after combat, keeping the page nearly blank.
         if g.clear:
             self.rect(g.right-31,g.bottom+7,g.right-7,g.bottom+82,CYAN)
             self.text("NEXT",g.right-57,g.bottom+97,16,CYAN)
-            self.text("CHAPTER CLEAR  /  Enter 다음 챕터",370,574,26,CYAN)
+            self.text('관제창 파괴 / Enter 탈출' if g.command_window else 'CHAPTER CLEAR / Enter 다음 챕터',370,510 if g.command_window else 574,26,CYAN)
         else:
             self.line(g.right-5,g.bottom+6,g.right-5,g.bottom+70,(186,184,174))
         mx,my=self.mouse
         self.line(mx-8,my,mx-3,my,CYAN);self.line(mx+3,my,mx+8,my,CYAN)
         self.line(mx,my-8,mx,my-3,CYAN);self.line(mx,my+3,mx,my+8,CYAN)
         p.draw_circle(mx,my,2,*CYAN,255,False)
+
+    def draw_command_window(self):
+        window=self.game.command_window
+        l,b,r,t=window.box
+        stage=window.damage_stage
+        art=self.commander_art
+        y1,y2=round(stage*art.h/4),round((stage+1)*art.h/4)
+        art.clip_draw(0,art.h-y2,art.w,y2-y1,(l+r)/2,(b+t)/2,r-l,t-b)
+        if window.hp>0:
+            hits=(window.max_hp-window.hp)%12
+            for i in range(hits):
+                x=l+35+(i*67+42)%max(1,int(r-l-70))
+                y=b+25+(i*41+13)%max(1,int(t-b-50))
+                for angle in (i*.8,i*.8+2.1,i*.8+4.2):
+                    length=8+i%4*3
+                    self.line(x,y,x+math.cos(angle)*length,y+math.sin(angle)*length,(199,233,241),220)
+            if window.hit_flash:
+                self.rect(l+8,b+8,r-8,t-8,(172,230,246),False,round(255*window.hit_flash/.18))
+
+    def draw_laser(self,laser):
+        dx,dy=laser.x2-laser.x1,laser.y2-laser.y1
+        length=math.hypot(dx,dy)
+        ux,uy=dx/max(1,length),dy/max(1,length)
+        if laser.active:
+            self.rect(*laser.box,(236,49,81),True,80)
+            self.rect(*laser.box,(236,49,81),False,180)
+            if abs(dx)>abs(dy):
+                self.rect(min(laser.x1,laser.x2),laser.y1-3,max(laser.x1,laser.x2),laser.y1+3,(255,219,231),True)
+                self.line(laser.x1,laser.y1,laser.x2,laser.y2,(255,255,255))
+            else:
+                self.rect(laser.x1-3,min(laser.y1,laser.y2),laser.x1+3,max(laser.y1,laser.y2),(255,219,231),True)
+                self.line(laser.x1,laser.y1,laser.x2,laser.y2,(255,255,255))
+        else:
+            alpha=round(110+60*math.sin(self.ui_time*10))
+            for distance in range(0,round(length),18):
+                end=min(length,distance+10)
+                self.line(laser.x1+ux*distance,laser.y1+uy*distance,laser.x1+ux*end,laser.y1+uy*end,RED,alpha)
+        self.rect(laser.x1-10,laser.y1-10,laser.x1+10,laser.y1+10,(48,57,69),True)
+        p.draw_circle(laser.x1,laser.y1,5,*(RED if laser.active else (235,155,63)),255,True)
+        self.arrow(laser.x1+ux*14,laser.y1+uy*14,ux,uy,RED,20,180)
 
     def panel(self,title,sub,lines,footer):
         self.rect(0,0,WIDTH,HEIGHT,(249,247,241),True,236)
@@ -628,7 +717,7 @@ class App:
             elif g.state=="won":
                 self.panel("ESCAPE COMPLETE",f"모든 방 섬멸 / 생존 나이 {g.age}세",[
                     f"방 {len(g.levels)}개 클리어   /   플레이 {int(g.elapsed//60)}분 {int(g.elapsed%60)}초",
-                    f"발사 {g.shots}발   /   전체 사망 {g.total_deaths}회","최종보스를 쓰러뜨리고 12개 챕터를 통과했습니다.",
+                    f"발사 {g.shots}발   /   전체 사망 {g.total_deaths}회","관제창을 파괴하고 사령관의 레이저를 멈췄습니다.",
                     "20세에 가까운 나이로 클리어해 보세요."],"Enter  새로운 플레이")
         if self.paused:self.panel("PAUSED","시간도 함께 멈춰 있습니다",["ESC를 누르면 이어서 플레이합니다.","F1을 누르면 조작과 규칙을 확인할 수 있습니다."],"ESC  계속하기")
         if self.help:
@@ -677,7 +766,7 @@ class App:
             p.update_canvas();frames+=1
             time.sleep(.002)
         self.motion_atlases.clear()
-        del self.atlas,self.characters,self.special_enemies
+        del self.atlas,self.characters,self.special_enemies,self.elite_gunner,self.commander_art
         p.close_canvas()
 
     def integration_test(self):
@@ -795,7 +884,7 @@ class App:
         report={'status':'pass','checks':checks,'count':len(checks)}
         if self.args.test_report:Path(self.args.test_report).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
         self.motion_atlases.clear()
-        del self.atlas,self.characters,self.special_enemies;p.close_canvas()
+        del self.atlas,self.characters,self.special_enemies,self.elite_gunner,self.commander_art;p.close_canvas()
 
     def verify_waist_connections(self, check):
         """Read our own framebuffer and check head-to-feet silhouette continuity."""

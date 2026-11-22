@@ -70,9 +70,10 @@ class RoomEntryTests(unittest.TestCase):
         step = 20
         for index in range(len(Game().levels)):
             game = self.room(index)
+            left,bottom,right,top=game.movement_bounds(game.player)
             def clear(x, y):
                 box = (x-16, y-23, x+16, y+49)
-                return (game.left+16 <= x <= game.right-16 and game.bottom+22 <= y <= game.top-49
+                return (left+16 <= x <= right-16 and bottom+22 <= y <= top-49
                         and not any(game.overlap(box, r) for r in game.solids()))
             start = (int(game.player.x), int(game.player.y))
             todo, seen = deque([start]), {start}
@@ -83,8 +84,8 @@ class RoomEntryTests(unittest.TestCase):
                     if point not in seen and clear(*point):
                         seen.add(point)
                         todo.append(point)
-            self.assertTrue(any(y > game.top-120 for x,y in seen), f'chapter {index+1}: upper route')
-            self.assertTrue(any(x > game.right-50 for x,y in seen), f'chapter {index+1}: exit route')
+            self.assertTrue(any(y > top-120 for x,y in seen), f'chapter {index+1}: upper route')
+            self.assertTrue(any(x > right-50 for x,y in seen), f'chapter {index+1}: exit route')
 
 
 if __name__ == '__main__':
